@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   readPrivateJson,
   writePrivateJson,
-} from "@flair-agency/private-runtime-files";
+} from "@flair-agency/private-files";
 
 import { isMainModule } from "@flair-agency/cli-utils/is-main";
 import { evaluateInvitationV2DualRun } from "./invitation_v2_dual_run.mjs";

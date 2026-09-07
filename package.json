@@ -11,19 +11,21 @@
     "./scripts/compare_invitation_v2_dual_run": "./scripts/compare_invitation_v2_dual_run.mjs",
     "./scripts/resolve_invitation_source": "./scripts/resolve_invitation_source.mjs",
     "./scripts/export_invitation_targets": "./scripts/export_invitation_targets.mjs",
-    "./scripts/sync_invitation_observations": "./scripts/sync_invitation_observations.mjs"
+    "./scripts/sync_invitation_observations": "./scripts/sync_invitation_observations.mjs",
+    "./contracts": "./src/contracts.mjs"
   },
   "files": [
     "SKILL.md",
     "scripts",
     "references",
     "agents",
-    "LICENSE"
+    "LICENSE",
+    "src"
   ],
   "dependencies": {
-    "@live-agency-skills/lark-base-client": "2.0.0",
-    "@flair-agency/private-runtime-files": "1.0.0",
-    "@flair-agency/source-provider-api": "1.6.0",
+    "@flair-agency/lark-base-provider": "1.0.0",
+    "@flair-agency/private-files": "1.0.0",
+    "@flair-agency/provider-protocol": "1.0.0",
     "@flair-agency/cli-utils": "0.1.0"
   },
   "scripts": {

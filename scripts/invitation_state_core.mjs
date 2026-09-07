@@ -1,4 +1,4 @@
-import { validateInvitationObservations } from "@flair-agency/source-provider-api";
+import { validateInvitationObservations } from "../src/contracts.mjs";
 
 export function normalizeAccountKey(value) {
   let normalized = String(value).normalize("NFKC").trim();

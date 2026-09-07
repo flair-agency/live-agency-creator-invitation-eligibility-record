@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 
-import { LARK_MEDIA_MAX_BYTES } from "@live-agency-skills/lark-base-client/skill-client";
-import { writePrivateJson } from "@flair-agency/private-runtime-files";
+import { LARK_MEDIA_MAX_BYTES } from "@flair-agency/lark-base-provider/skill-client";
+import { writePrivateJson } from "@flair-agency/private-files";
 
 import {
   buildRefreshPlan,

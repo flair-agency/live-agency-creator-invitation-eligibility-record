@@ -4,7 +4,7 @@ import { isMainModule } from "@flair-agency/cli-utils/is-main";
 
 import path from "node:path";
 
-import { createLarkBaseClient } from "@live-agency-skills/lark-base-client/skill-client";
+import { createLarkBaseClient } from "@flair-agency/lark-base-provider/skill-client";
 
 import {
   exportTargets,
