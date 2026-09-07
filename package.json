@@ -1,0 +1,32 @@
+{
+  "name": "@flair-agency/creator-invitation-status-sync",
+  "version": "0.0.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    "./SKILL.md": "./SKILL.md",
+    "./scripts/invitation_v2_dual_run": "./scripts/invitation_v2_dual_run.mjs",
+    "./scripts/invitation_lark_runtime": "./scripts/invitation_lark_runtime.mjs",
+    "./scripts/invitation_state_core": "./scripts/invitation_state_core.mjs",
+    "./scripts/compare_invitation_v2_dual_run": "./scripts/compare_invitation_v2_dual_run.mjs",
+    "./scripts/resolve_invitation_source": "./scripts/resolve_invitation_source.mjs",
+    "./scripts/export_invitation_targets": "./scripts/export_invitation_targets.mjs",
+    "./scripts/sync_invitation_observations": "./scripts/sync_invitation_observations.mjs"
+  },
+  "files": [
+    "SKILL.md",
+    "scripts",
+    "references",
+    "agents",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@live-agency-skills/lark-base-client": "2.0.0",
+    "@flair-agency/private-runtime-files": "1.0.0",
+    "@flair-agency/source-provider-api": "1.6.0",
+    "@flair-agency/cli-utils": "0.1.0"
+  },
+  "scripts": {
+    "test": "node --test"
+  }
+}

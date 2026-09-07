@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
-import { isMainModule } from "../../_shared/is-main.mjs";
+import { isMainModule } from "@flair-agency/cli-utils/is-main";
 
 import path from "node:path";
 
-import { createLarkBaseClient } from "../../_shared/lark-base-client.mjs";
-import { readPrivateJson } from "@live-agency-skills/private-runtime-files";
+import { createLarkBaseClient } from "@live-agency-skills/lark-base-client/skill-client";
+import { readPrivateJson } from "@flair-agency/private-runtime-files";
 
 import {
   applyRefresh,

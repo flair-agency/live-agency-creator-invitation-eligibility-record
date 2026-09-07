@@ -5,9 +5,9 @@ import path from "node:path";
 import {
   readPrivateJson,
   writePrivateJson,
-} from "@live-agency-skills/private-runtime-files";
+} from "@flair-agency/private-runtime-files";
 
-import { isMainModule } from "../../_shared/is-main.mjs";
+import { isMainModule } from "@flair-agency/cli-utils/is-main";
 import { evaluateInvitationV2DualRun } from "./invitation_v2_dual_run.mjs";
 
 export function parseArgs(argv) {
