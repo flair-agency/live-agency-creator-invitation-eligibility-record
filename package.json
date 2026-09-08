@@ -7,6 +7,7 @@
     "./SKILL.md": "./SKILL.md",
     "./scripts/invitation_v2_dual_run": "./scripts/invitation_v2_dual_run.mjs",
     "./scripts/invitation_lark_runtime": "./scripts/invitation_lark_runtime.mjs",
+    "./scripts/invitation_eligibility_runtime": "./scripts/invitation_eligibility_runtime.mjs",
     "./scripts/invitation_state_core": "./scripts/invitation_state_core.mjs",
     "./scripts/compare_invitation_v2_dual_run": "./scripts/compare_invitation_v2_dual_run.mjs",
     "./scripts/resolve_invitation_source": "./scripts/resolve_invitation_source.mjs",

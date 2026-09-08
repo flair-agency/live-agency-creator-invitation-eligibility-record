@@ -88,7 +88,7 @@ function bind(byId, id, expectedType, label) {
     throw new TypeError(rows.length ? `${label} field ID is duplicated` : `${label} field ID is missing`);
   }
   const field = rows[0];
-  if (field.ui_type !== expectedType) {
+  if (!(Array.isArray(expectedType) ? expectedType : [expectedType]).includes(field.ui_type)) {
     throw new TypeError(`${label} field type must be ${expectedType}; live=${field.ui_type}`);
   }
   if (typeof field.field_name !== "string" || !field.field_name) {
@@ -100,7 +100,7 @@ function bind(byId, id, expectedType, label) {
 export function resolveInvitationFields(creatorFields, stateFields, fieldIds) {
   const creatorById = fieldMap(creatorFields);
   const stateById = fieldMap(stateFields);
-  const creatorAccount = bind(creatorById, fieldIds.creatorAccount, "Url", "creator account");
+  const creatorAccount = bind(creatorById, fieldIds.creatorAccount, ["Url", "Text"], "creator account");
   const state = {
     creator: bind(stateById, fieldIds.stateCreator, "DuplexLink", "state creator"),
     status: bind(stateById, fieldIds.stateStatus, "SingleSelect", "state status"),
@@ -310,6 +310,22 @@ function fieldsForCreate(row, bindings) {
   if (row.nickname) fields[bindings.nickname.name] = row.nickname;
   if (row.externalUserId) fields[bindings.externalUserId.name] = row.externalUserId;
   return fields;
+}
+
+// Pure reviewed payload construction for a selected no-avatar composition.
+// Avatar plans must use a separately reviewed upload/append route.
+export function buildInvitationWritePayloads({ prepared }) {
+  if (!prepared || prepared.blocked || hasBlockingRefreshIssues(prepared.corePlan)) {
+    throw new TypeError("unblocked prepared invitation plan is required");
+  }
+  if (prepared.corePlan.attachExisting.length || prepared.corePlan.creates.some(row => row.avatar)) {
+    throw new TypeError("avatar writes require a separately reviewed composition");
+  }
+  const state = prepared.bindings.state;
+  return {
+    creates: prepared.corePlan.creates.map(row => ({ fields: fieldsForCreate(row, state) })),
+    updates: prepared.corePlan.updates.map(row => ({ record_id: row.recordId, fields: { [state.observedAt.name]: row.observedAtMs } })),
+  };
 }
 
 async function inBatches(rows, size, callback) {

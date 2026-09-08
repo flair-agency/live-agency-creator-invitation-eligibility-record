@@ -116,3 +116,51 @@ export function validateInvitationObservations(snapshot) {
   return snapshot;
 }
 
+export const INVITATION_ELIGIBILITY_CONTRACT = "invitation-eligibility-observations/v1";
+
+// A new explicit semantic contract. Legacy state snapshots are never promoted
+// into this contract by inference; the selected source must supply it.
+export function validateInvitationEligibilityObservations(snapshot) {
+  assertObject(snapshot, "invitation eligibility observations");
+  if (snapshot.contractVersion !== INVITATION_ELIGIBILITY_CONTRACT) {
+    throw new TypeError("explicit invitation eligibility contract is required");
+  }
+  for (const key of Object.keys(snapshot)) {
+    if (!["contractVersion", "observedAt", "rowCount", "creators"].includes(key)) {
+      throw new TypeError(`unsupported eligibility snapshot field: ${key}`);
+    }
+  }
+  assertIsoDateTime(snapshot.observedAt, "eligibility observedAt");
+  if (!Array.isArray(snapshot.creators) || snapshot.rowCount !== snapshot.creators.length) {
+    throw new TypeError("eligibility rowCount must match creators.length");
+  }
+  const seen = new Set();
+  for (const [index, row] of snapshot.creators.entries()) {
+    assertObject(row, `eligibility creator ${index}`);
+    for (const key of Object.keys(row)) {
+      if (!["accountKey", "result", "eligibility", "externalUserId", "nickname", "avatar"].includes(key)) {
+        throw new TypeError(`unsupported eligibility creator field: ${key}`);
+      }
+    }
+    if (typeof row.accountKey !== "string") throw new TypeError("eligibility accountKey is required");
+    const key = row.accountKey.normalize("NFKC").trim().replace(/^@/, "").toLocaleLowerCase("und");
+    if (!key || seen.has(key)) throw new TypeError("eligibility accountKey is empty or duplicated after normalization");
+    seen.add(key);
+    if (!["observed", "not_found", "unavailable"].includes(row.result)) {
+      throw new TypeError("eligibility result must be observed, not_found or unavailable");
+    }
+    if (row.result === "observed") {
+      if (typeof row.eligibility !== "string" || !row.eligibility.trim()) {
+        throw new TypeError("observed eligibility requires an explicit normalized value");
+      }
+    } else if (row.eligibility !== null) {
+      throw new TypeError("not_found and unavailable eligibility must remain null");
+    }
+    // Reuse optional identity/avatar validation only; the placeholder stays
+    // inside this structural check and is never returned or planned.
+    validateInvitationObservations({ observedAt: snapshot.observedAt, rowCount: 1,
+      creators: [{ accountKey: row.accountKey, state: "structural-validation", externalUserId: row.externalUserId,
+        nickname: row.nickname, avatar: row.avatar }] });
+  }
+  return snapshot;
+}
