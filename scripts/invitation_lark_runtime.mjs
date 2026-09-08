@@ -328,6 +328,19 @@ export function buildInvitationWritePayloads({ prepared }) {
   };
 }
 
+// Keep image metadata in review material; never silently omit its side effect.
+// This template supports the bounded create-then-attach composition only.
+export function buildInvitationImageCreateIntentRows({ prepared }) {
+  if (!prepared || prepared.blocked || hasBlockingRefreshIssues(prepared.corePlan)) {
+    throw new TypeError("unblocked prepared invitation plan is required");
+  }
+  const { creates, updates, attachExisting } = prepared.corePlan;
+  if (creates.length !== 1 || !creates[0].avatar || updates.length || attachExisting.length) {
+    throw new TypeError("one image-backed create without updates or existing attachments is required");
+  }
+  return creates.map(row => ({ fields: fieldsForCreate(row, prepared.bindings.state), avatar: structuredClone(row.avatar) }));
+}
+
 async function inBatches(rows, size, callback) {
   for (let index = 0; index < rows.length; index += size) {
     await callback(rows.slice(index, index + size));
