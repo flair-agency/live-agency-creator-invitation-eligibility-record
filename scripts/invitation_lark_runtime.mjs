@@ -347,6 +347,17 @@ async function inBatches(rows, size, callback) {
   }
 }
 
+export function buildInvitationImageBatchCreateIntentRows({ prepared }) {
+  if (!prepared || prepared.blocked || hasBlockingRefreshIssues(prepared.corePlan)) {
+    throw new TypeError("unblocked prepared invitation plan is required");
+  }
+  const { creates, updates, attachExisting } = prepared.corePlan;
+  if (!creates.length || creates.length > 100 || !creates.some(row => row.avatar) || updates.length || attachExisting.length) {
+    throw new TypeError("one image-backed create batch without updates or existing attachments is required");
+  }
+  return creates.map(row => ({ fields: fieldsForCreate(row, prepared.bindings.state), avatar: structuredClone(row.avatar) }));
+}
+
 async function attachAvatar(client, config, bindings, row, recordId) {
   if (!row.avatar) return;
   await verifyAvatarFile(row.avatar);
