@@ -1,4 +1,4 @@
 interface:
-  display_name: "Creator invitation status sync"
+  display_name: "Invitation eligibility recording"
   short_description: "Maintain normalized invitation-status transitions in Lark"
-  default_prompt: "Use $creator-invitation-status-sync to prepare a reviewed dry run from normalized invitation observations, and apply it only if I explicitly approve the update."
+  default_prompt: "Use $live-agency-creator-invitation-eligibility-record to prepare a reviewed dry run from normalized invitation observations, and apply it only if I explicitly approve the update."

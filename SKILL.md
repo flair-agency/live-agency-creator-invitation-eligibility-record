@@ -1,5 +1,5 @@
 ---
-name: creator-invitation-status-sync
+name: live-agency-creator-invitation-eligibility-record
 description: Prepare targets and record normalized invitation-eligibility observations with reviewed transition-history plans. Use for invitation eligibility refreshes; do not acquire source observations, track sent-invitation progress, send invitations, or compact history.
 ---
 

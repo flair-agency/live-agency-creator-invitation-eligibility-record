@@ -1,4 +1,4 @@
-# creator-invitation-status-sync
+# live-agency-creator-invitation-eligibility-record
 
 Independent Skill repository. [SKILL.md](SKILL.md) owns its behavior and acceptance contract.
 

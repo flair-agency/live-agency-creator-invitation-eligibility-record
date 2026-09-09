@@ -1,5 +1,5 @@
 {
-  "name": "@flair-agency/creator-invitation-status-sync",
+  "name": "@flair-agency/creator-invitation-eligibility-record",
   "version": "0.0.0",
   "type": "module",
   "license": "MIT",
@@ -31,5 +31,9 @@
   },
   "scripts": {
     "test": "node --test"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/flair-agency/live-agency-creator-invitation-eligibility-record.git"
   }
 }
