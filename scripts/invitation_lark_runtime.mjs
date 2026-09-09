@@ -358,6 +358,23 @@ export function buildInvitationImageBatchCreateIntentRows({ prepared }) {
   return creates.map(row => ({ fields: fieldsForCreate(row, prepared.bindings.state), avatar: structuredClone(row.avatar) }));
 }
 
+// Preserve every effect and the runtime's update/create/existing-image/new-image order.
+export function buildInvitationHistoryWritePayloads({ prepared }) {
+  if (!prepared || prepared.blocked || hasBlockingRefreshIssues(prepared.corePlan)) {
+    throw new TypeError("unblocked prepared invitation plan is required");
+  }
+  const { creates, updates, attachExisting } = prepared.corePlan;
+  if ([creates, updates, attachExisting].some(rows => rows.length > 100)) {
+    throw new TypeError("selected history composition supports one bounded batch per operation");
+  }
+  const state = prepared.bindings.state;
+  return {
+    creates: creates.map(row => ({ fields: fieldsForCreate(row, state), avatar: structuredClone(row.avatar) })),
+    updates: updates.map(row => ({ record_id: row.recordId, fields: { [state.observedAt.name]: row.observedAtMs } })),
+    appendExisting: attachExisting.map(row => ({ recordId: row.recordId, avatar: structuredClone(row.avatar) })),
+  };
+}
+
 async function attachAvatar(client, config, bindings, row, recordId) {
   if (!row.avatar) return;
   await verifyAvatarFile(row.avatar);
