@@ -364,9 +364,6 @@ export function buildInvitationHistoryWritePayloads({ prepared }) {
     throw new TypeError("unblocked prepared invitation plan is required");
   }
   const { creates, updates, attachExisting } = prepared.corePlan;
-  if ([creates, updates, attachExisting].some(rows => rows.length > 100)) {
-    throw new TypeError("selected history composition supports one bounded batch per operation");
-  }
   const state = prepared.bindings.state;
   return {
     creates: creates.map(row => ({ fields: fieldsForCreate(row, state), avatar: structuredClone(row.avatar) })),

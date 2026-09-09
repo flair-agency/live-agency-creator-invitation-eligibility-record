@@ -36,9 +36,10 @@ available for existing routes; do not use them to bypass new semantic admission.
 For an explicitly selected client composition, prepare the complete review
 payload with `buildInvitationHistoryWritePayloads` from
 `scripts/invitation_lark_runtime.mjs`. It preserves timestamp updates, creates
-with image metadata, and existing-row image resumes. Its bounded composition
-supports at most 100 rows per operation; do not remove image effects or silently
-split a larger approved plan to fit it. Bind the complete result to the same
+with image metadata, and existing-row image resumes. The payload preserves the complete plan without a 100-row total limit. Select
+a destination composition that binds every request partition to the same approved
+plan and preserves all effects and ordering. A single-batch writer is insufficient
+for larger plans; do not remove image effects or reduce the selected target set. Bind the complete result to the same
 reviewed business-plan hash through the selected destination Provider.
 `applyEligibilityReviewed` remains the execution and final-readback entry point.
 
