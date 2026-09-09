@@ -24,7 +24,7 @@
     "src"
   ],
   "dependencies": {
-    "@flair-agency/lark-base-provider": "1.0.0",
+    "@flair-agency/lark-base-provider": "1.2.0",
     "@flair-agency/private-files": "1.0.0",
     "@flair-agency/provider-protocol": "1.0.0",
     "@flair-agency/cli-utils": "0.1.0"

@@ -1,14 +1,56 @@
 ---
 name: creator-invitation-status-sync
-description: Prepare targets from Lark, validate normalized creator invitation-status observations, and maintain transition-based status history with reviewed dry runs. Use for status refreshes; do not use to acquire service-specific observations, send invitations, follow accounts, or compact history.
+description: Prepare targets and record normalized invitation-eligibility observations with reviewed transition-history plans. Use for invitation eligibility refreshes; do not acquire source observations, track sent-invitation progress, send invitations, or compact history.
 ---
 
-# Sync creator invitation status
+# Record invitation eligibility observations
 
 Maintain transition-based invitation-status history in Lark without embedding
 knowledge of the observation service. The public core knows only a versioned
 normalized observation contract and Lark field IDs supplied by private local
 configuration.
+
+## Adopted meaning and legacy history
+
+New observations describe whether the platform permits an invitation at the
+observation time. They do not describe the agency's scouting target decision,
+invitation type, sent-invitation progress or membership status.
+
+Require the selected source's reviewed contract to establish eligibility
+semantics before admitting its output. A nonempty state string or a matching
+destination option alone does not establish that meaning. Stop if the selected
+source mixes eligibility with sent-invitation progress or leaves the meaning
+unresolved. The legacy structural validator does not prove this distinction.
+
+For a new selected eligibility composition, use the explicit
+`invitation-eligibility-observations/v1` input and
+`scripts/invitation_eligibility_runtime.mjs`. Its version 3 plans bind the
+destination and current fields as well as the original typed observations.
+The trusted composition must supply `reviewHistory` and approve the meaning of
+the actual history snapshot on every planning/apply/readback pass. A contract
+tag or callback returning true without reviewed evidence is not that review.
+Unknown outcomes are retained in a blocked plan until their destination
+representation is separately established. The legacy helpers below remain
+available for existing routes; do not use them to bypass new semantic admission.
+
+For an explicitly selected client composition, prepare the complete review
+payload with `buildInvitationHistoryWritePayloads` from
+`scripts/invitation_lark_runtime.mjs`. It preserves timestamp updates, creates
+with image metadata, and existing-row image resumes. Its bounded composition
+supports at most 100 rows per operation; do not remove image effects or silently
+split a larger approved plan to fit it. Bind the complete result to the same
+reviewed business-plan hash through the selected destination Provider.
+`applyEligibilityReviewed` remains the execution and final-readback entry point.
+
+Preserve not-found and unavailable outcomes; never turn either into ineligible
+or invent an eligible/ineligible value. If the destination cannot represent an
+observed outcome without changing its meaning, stop and report the mapping gap.
+
+Keep legacy history intact. Before using a legacy destination for this boundary,
+inspect its meanings under an explicitly selected read scope. If meanings are
+mixed or uncertain, present a migration proposal before refresh; do not convert,
+delete, or relabel old states automatically. Existing plans and receipts are
+not proof that old states represented eligibility.
 
 For every Lark Base read or mutation, follow the policy supplied by the
 installed Lark Base provider.
@@ -74,9 +116,23 @@ Use a private owner-only directory for target manifests, normalized
 observations, avatar files, and plans. They contain creator identifiers. Never
 commit or publish them.
 
-## Version 2 migration path
+## Migration verification and route selection
 
-For a version 2 dual run, read
+Verify the explicitly selected installed workflow through its planning,
+approved execution and readback entry points. An MCP adapter is required only
+when the selected client route uses it. Package and schema versions do not
+select a production route. Reuse applicable Provider evidence and compare the
+same reviewed inputs with a verified existing route when available; otherwise
+use the business contract and independently established expected results.
+Keep synthetic checks distinct from real-destination verification.
+
+The following dual-run procedure applies only when explicitly comparing or
+switching the legacy Creator Scouting MCP route. Do not introduce that route
+as a prerequisite for another selected workflow. Passing a comparison or test
+does not authorize mutations, activation, schedule changes or retirement of the
+active route; preserve the selected recovery path until cutover acceptance.
+
+For that legacy route's version 2 dual run, read
 [references/v2-dual-run.md](references/v2-dual-run.md). Use the Creator Scouting
 MCP to observe and validate invitation eligibility from the exact same reviewed
 target manifest used by the version 1 path. Do not resolve a provider directly

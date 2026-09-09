@@ -1,4 +1,14 @@
-# Version 2 dual-run comparison
+# Legacy Creator Scouting MCP dual-run comparison
+
+## Applicability
+
+Use this procedure only when the selected migration explicitly compares or
+switches the legacy Creator Scouting MCP route. It is not a prerequisite for
+installed CLI or other non-MCP workflow acceptance. The version 1/version 2
+labels below name those historical routes, not npm package major versions or
+a general migration milestone. Do not activate an unselected route to run this
+comparison. For other workflows, follow the migration verification section in
+[the Skill instructions](../SKILL.md).
 
 Use this migration-only path to compare the current version 1 invitation-status
 workflow with the Creator Scouting MCP version 2 read and acquisition path. It

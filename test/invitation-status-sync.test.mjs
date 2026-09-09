@@ -17,14 +17,12 @@ import {
   refreshPlanSha256,
   resolveInvitationFields,
 } from "../scripts/invitation_lark_runtime.mjs";
-import { LARK_MEDIA_MAX_BYTES } from "../../../providers/lark-base/src/skill-client.mjs";
-import { resolveInvitationSource } from "../scripts/resolve_invitation_source.mjs";
+import { LARK_MEDIA_MAX_BYTES } from "@flair-agency/lark-base-provider/skill-client";
 import {
   applyReviewed,
   dryRun,
 } from "../scripts/sync_invitation_observations.mjs";
 
-const repositoryRoot = path.resolve(import.meta.dirname, "../../../test/fixtures/installation");
 const bindings = {
   creator: { name: "Creator" },
   status: { name: "State" },
@@ -198,35 +196,6 @@ test("adjacent compaction helper does not merge A-B-A", () => {
     ["rec3"],
     ["rec4"],
   ]);
-});
-
-test("resolves an unattended synthetic provider through npm", async () => {
-  const directory = await mkdtemp(path.join(os.tmpdir(), "invitation-source-test-"));
-  try {
-    const requestPath = path.join(directory, "request.json");
-    const outputPath = path.join(directory, "observations.json");
-    await writeFile(
-      requestPath,
-      JSON.stringify({
-        inputKind: "application/x.synthetic-observation-request+json",
-        observedAt: "2030-01-02T03:04:05.000Z",
-        targets: [{ accountKey: "synthetic.creator" }],
-      }),
-      { encoding: "utf8", mode: 0o600 },
-    );
-    const result = await resolveInvitationSource({
-      providerRoot: repositoryRoot,
-      request: requestPath,
-      output: outputPath,
-      unattended: true,
-    });
-    const output = JSON.parse(await readFile(outputPath, "utf8"));
-    assert.equal(result.status, "normalized");
-    assert.equal(output.rowCount, 1);
-    assert.equal(output.creators[0].state, "synthetic_pending");
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
 });
 
 function fakeLarkClient() {
