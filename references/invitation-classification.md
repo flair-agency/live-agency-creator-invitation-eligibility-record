@@ -1,9 +1,21 @@
 # Invitation category and reviewed classification
 
-The source Provider owns acquisition and the meaning of source observations.
-The Skill owns the destination classification. Public helpers contain no service
+The source Provider acquires and normalizes source facts according to documented
+platform meaning. The Skill owns use-case classification in the destination.
+Public helpers contain no service
 labels or source-screen rules. Authorized operators obtain the source meanings
 and observation procedure from the selected private Provider's packaged knowledge.
+
+```mermaid
+flowchart TD
+  Source[Normalized source facts] --> Classify[Skill classification]
+  Taxonomy[Explicit destination taxonomy] --> Classify
+  Evidence[Reviewed additional evidence, when supplied] --> Classify
+  Classify --> Plan[Existing history plan]
+```
+
+The planning helper follows this flow without performing external operations.
+Its selected-environment connection is not yet implemented.
 
 # Inputs and procedure
 
