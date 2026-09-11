@@ -12,9 +12,18 @@ configuration.
 
 ## Adopted meaning and legacy history
 
+For category-preserving planning, explicitly select the v2 normalized contract
+and read [classification and evidence](references/invitation-classification.md).
+The Provider supplies the observed parent eligibility and invitation category;
+this Skill chooses a configured child only from that category or explicit
+reviewed refinement evidence. The new helper is pure planning, not an execution
+or selected-environment entry. Existing v1 routes remain compatible but cannot
+preserve category and are insufficient for category-preserving migration acceptance.
+
 New observations describe whether the platform permits an invitation at the
 observation time. They do not describe the agency's scouting target decision,
-invitation type, sent-invitation progress or membership status.
+sent-invitation progress or membership status. A separately observed invitation
+category can refine the destination status without changing the parent meaning.
 
 Require the selected source's reviewed contract to establish eligibility
 semantics before admitting its output. A nonempty state string or a matching

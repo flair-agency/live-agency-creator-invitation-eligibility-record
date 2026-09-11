@@ -13,7 +13,8 @@
     "./scripts/resolve_invitation_source": "./scripts/resolve_invitation_source.mjs",
     "./scripts/export_invitation_targets": "./scripts/export_invitation_targets.mjs",
     "./scripts/sync_invitation_observations": "./scripts/sync_invitation_observations.mjs",
-    "./contracts": "./src/contracts.mjs"
+    "./contracts": "./src/contracts.mjs",
+    "./invitation-classification": "./src/invitation-classification.mjs"
   },
   "files": [
     "SKILL.md",

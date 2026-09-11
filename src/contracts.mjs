@@ -118,6 +118,30 @@ export function validateInvitationObservations(snapshot) {
 
 export const INVITATION_ELIGIBILITY_CONTRACT = "invitation-eligibility-observations/v1";
 
+export const INVITATION_ELIGIBILITY_CONTRACT_V2 = "invitation-eligibility-observations/v2";
+
+// Deliberate opt-in: v1 remains unchanged and never silently discards category.
+export function validateInvitationEligibilityObservationsV2(snapshot) {
+  assertObject(snapshot, "invitation eligibility observations");
+  if (snapshot.contractVersion !== INVITATION_ELIGIBILITY_CONTRACT_V2 || !Array.isArray(snapshot.creators)) {
+    throw new TypeError("explicit invitation eligibility v2 contract and creators are required");
+  }
+  const creators = snapshot.creators.map((row) => {
+    assertObject(row, "eligibility creator");
+    if (!Object.hasOwn(row, "invitationCategory") || !(row.invitationCategory === null ||
+        (typeof row.invitationCategory === "string" && row.invitationCategory.trim()))) {
+      throw new TypeError("invitationCategory must be null or a nonempty string");
+    }
+    if (row.result !== "observed" && row.invitationCategory !== null) {
+      throw new TypeError("unobserved invitationCategory must remain null");
+    }
+    const { invitationCategory, ...legacy } = row;
+    return legacy;
+  });
+  validateInvitationEligibilityObservations({ ...snapshot, contractVersion: INVITATION_ELIGIBILITY_CONTRACT, creators });
+  return snapshot;
+}
+
 // A new explicit semantic contract. Legacy state snapshots are never promoted
 // into this contract by inference; the selected source must supply it.
 export function validateInvitationEligibilityObservations(snapshot) {
