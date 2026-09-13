@@ -85,11 +85,16 @@ export provides `buildRefreshPlanFromHistory` with `observations`, `manifest`,
 decision algorithm. The legacy `buildRefreshPlan` and service routes retain their
 existing inputs and behavior.
 
-These inputs do not select a Provider capability, establish historical meaning,
-verify source completeness or authorize a write. Actual source normalization,
-scoped acquisition and the reviewed taxonomy/evidence remain caller prerequisites;
-their selected-environment connection is still unimplemented. If a source row
-cannot be normalized, preserve its diagnostic and resolve it before applying.
+These pure helper inputs do not select a Provider capability, establish historical
+meaning or authorize a write. The [selected-environment workflow](environment-workflow.md)
+now connects the source instruction request and correlated v2 result to these
+helpers through `source` and `source-plan`. The selected source Provider owns
+normalization; the host performs scoped acquisition under its private instructions.
+Request/result correlation does not prove current actor/session/agency or image
+ownership. The reviewed taxonomy and refinement evidence remain caller inputs.
+Selected-environment writes and live acquisition acceptance remain incomplete.
+If a source row cannot be normalized, preserve its diagnostic and resolve it
+before applying.
 
 # Synthetic examples and exceptions
 

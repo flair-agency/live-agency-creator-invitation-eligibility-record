@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
-import { prepareEnvironmentInvitationTargets as targets, prepareEnvironmentInvitationPlan as plan } from '../src/invitation-environment.mjs';
+import { prepareEnvironmentInvitationTargets as targets, prepareEnvironmentInvitationPlan as plan, prepareEnvironmentInvitationSource as source, prepareEnvironmentInvitationSourcePlan as sourcePlan } from '../src/invitation-environment.mjs';
 import { buildClassifiedInvitationRefreshPlanFromHistory } from '../src/invitation-classification.mjs';
 import { parseArgs, parseInvitationEnvironmentConfiguration, run } from '../scripts/invitation_environment.mjs';
 import { exportTargets } from '../scripts/invitation_lark_runtime.mjs';
@@ -24,19 +24,62 @@ function observations(accounts = ['one'], extra = {}) {
   return {contractVersion:'invitation-eligibility-observations/v2',observedAt,rowCount:accounts.length,
     creators:accounts.map(accountKey => ({accountKey,result:'observed',eligibility:'eligible-example',invitationCategory:'category-one',externalUserId:'u1',nickname:'Name',...extra}))};
 }
-function fixture({people = [person('p1',' @ＯＮＥ '),person('p2','two')], history = [], due = people, intercept} = {}) {
+function fixture({people = [person('p1',' @ＯＮＥ '),person('p2','two')], history = [], due = people, intercept, sourceIntercept} = {}) {
   const calls = [], access = {selection:structuredClone(selection),async invoke(request) {
     calls.push(structuredClone(request));
+    if (request.capability === 'creator-invitation-observation-source/v2') {
+      const reply = {selection:structuredClone(selection), binding:{packageName:'@synthetic/source',packageVersion:'1.0.0',bindingId:'source',knowledgeVersion:'1'},
+        result:{requestId:request.requestId,capability:request.capability,version:request.version,context:structuredClone(request.context),status:'interaction-required',instructions:'synthetic private instruction'}};
+      await sourceIntercept?.(reply,request);
+      return reply;
+    }
     const {input,...identity} = request;
     const rows = input.dataset === 'people' ? (input.query === 'pending' ? due : people) : input.dataset === 'taxonomy' ? [root,child] : history;
     const reply = {selection:structuredClone(selection),binding:structuredClone(binding),result:{...identity,status:'done',output:{
       dataset:input.dataset,query:input.query,scope:input.parameters,selection:structuredClone(selection),configurationFingerprint:'b'.repeat(64),complete:true,rows:structuredClone(rows)}}};
     await intercept?.(reply,request);
     return reply;
+  }, async validateInstructionResult(request,result) {
+    assert.equal(request.capability,'creator-invitation-observation-source/v2');
+    return {selection:structuredClone(selection),binding:{packageName:'@synthetic/source',packageVersion:'1.0.0',bindingId:'source',knowledgeVersion:'1'},
+      result:structuredClone(result),verification:'request-result-correlation-only'};
   }};
   return {access,configuration:structuredClone(configuration),calls};
 }
 async function one(f) { return targets({...f,mode:'selected',selectedAccounts:['one']}); }
+
+test('selected source handoff preserves exact receipt and only admits correlated v2 output before datastore reads',async t=>{
+  const f=fixture(), receipt=await one(f), handoff=await source({...f,targets:receipt});
+  assert.equal(handoff.request.capability,'creator-invitation-observation-source/v2');
+  assert.equal(handoff.request.version,'2'); assert.deepEqual(handoff.request.input,receipt.manifest);
+  const result={requestId:handoff.request.requestId,capability:handoff.request.capability,version:'2',context:handoff.request.context,
+    status:'done',output:observations()};
+  const prepared=await sourcePlan({...f,targets:receipt,sourceHandoff:handoff,sourceResult:result});
+  assert.equal(prepared.status,'prepared'); assert.equal(prepared.sourceProvenance.verification,'request-result-correlation-only');
+  const bad={...result,requestId:'wrong'}; const before=f.calls.length;
+  await assert.rejects(sourcePlan({...f,targets:receipt,sourceHandoff:handoff,sourceResult:bad}),{code:'INVITATION_SOURCE_RESULT_INVALID'});
+  assert.equal(f.calls.length,before);
+  const wrongContract={...result,output:{...result.output,contractVersion:'invitation-eligibility-observations/v1'}};
+  await assert.rejects(sourcePlan({...f,targets:receipt,sourceHandoff:handoff,sourceResult:wrongContract}),{code:'INVITATION_OBSERVATIONS_INVALID'});
+  assert.equal(f.calls.length,before);
+  const changed=fixture(); changed.access.selection.generation='c'.repeat(64);
+  await assert.rejects(sourcePlan({...changed,targets:receipt,sourceHandoff:handoff,sourceResult:result}),{code:'INVITATION_TARGET_RECEIPT_CHANGED'});
+  const stale=fixture(); stale.access.validateInstructionResult=async (_request,value)=>({selection:structuredClone(selection),
+    binding:{packageName:'@synthetic/source',packageVersion:'1.0.0',bindingId:'stale',knowledgeVersion:'1'},result:value,verification:'request-result-correlation-only'});
+  await assert.rejects(sourcePlan({...stale,targets:receipt,sourceHandoff:handoff,sourceResult:result}),{code:'INVITATION_SOURCE_BINDING_CHANGED'});
+});
+
+test('source instructions reject an uncorrelated reply and retain a safe provider failure',async()=>{
+  const receipt=await one(fixture());
+  let f=fixture({sourceIntercept:(reply)=>{reply.result.requestId='wrong';}});
+  await assert.rejects(source({...f,targets:receipt}),{code:'INVITATION_SOURCE_PROTOCOL_INVALID'});
+  f=fixture({sourceIntercept:(reply)=>{reply.result.status='failed'; delete reply.result.instructions;
+    reply.result.error={code:'AUTH_FAILED',message:'authentication failed',details:{stage:'session'}};}});
+  await assert.rejects(source({...f,targets:receipt}),error=>{
+    assert.equal(error.code,'INVITATION_SOURCE_FAILED'); assert.equal(error.providerCode,'AUTH_FAILED');
+    assert.equal(error.providerError.details.stage,'session'); return true;
+  });
+});
 
 test('target modes preserve normalization, selected order and limit; uniqueness precedes limiting',async()=>{
   const f = fixture();
@@ -171,6 +214,14 @@ test('CLI requires pinned explicit inputs, writes private receipt and detects co
   for(const extra of [['--mode','all'],['--apply','true'],['--limit','0']]) assert.throws(()=>parseArgs([...args,...extra]));
   await writeFile(conf,bytes+'\n');
   await assert.rejects(run(parsed,{createAccess:async()=>assert.fail('configuration mismatch must precede Runtime')}),{code:'INVITATION_CONFIGURATION_CHANGED'});
+});
+
+test('CLI source operations require private target, handoff, and result paths',()=>{
+  const base=['--environment','/private/environment.json','--generation',selection.generation,'--configuration','/private/configuration.json',
+    '--configuration-sha256','b'.repeat(64),'--output','/private/output.json'];
+  assert.equal(parseArgs(['source',...base,'--targets','/private/targets.json']).operation,'source');
+  assert.equal(parseArgs(['source-plan',...base,'--targets','/private/targets.json','--source-handoff','/private/handoff.json','--source-result','/private/result.json']).operation,'source-plan');
+  assert.throws(()=>parseArgs(['source-plan',...base,'--targets','/private/targets.json','--source-handoff','/private/handoff.json']));
 });
 
 test('private correspondence JSON rejects duplicate members before parsing, including escaped equivalents',()=>{

@@ -80,8 +80,9 @@ into the public Skill.
 flowchart TD
   A["Select saved environment and private correspondence"] --> B["Read creator targets"]
   B --> C["Preserve target receipt"]
-  C --> D["Obtain reviewed v2 observations from selected source"]
-  D --> E["Recheck target identities and due membership"]
+  C --> D["Request selected private source instructions and preserve handoff"]
+  D --> R["Host follows selected private instructions and returns correlated v2 result"]
+  R --> E["Recheck target identities, due membership, and original avatar bytes"]
   E --> F["Read taxonomy and classify with explicit correspondence"]
   F --> G{"Classification resolved?"}
   G -->|No| H["Return blocked classification and mapping reasons"]
@@ -103,14 +104,22 @@ and the user's selected order. No implicit 100-target cap is introduced.
    `--configuration-sha256`, `--output`, and optional `--mode` / `--limit`.
    For `--mode selected`, repeat `--account` in the requested order. Preserve
    the resulting receipt, including the manifest and Provider read identity.
-3. Obtain source observations in `invitation-eligibility-observations/v2` under
-   the reviewed source contract, matching every target exactly once. Keep the
-   original avatar files described by those observations. This entry consumes
-   that normalized file; it does not select a source Provider itself.
-4. Run the same script's `plan` operation with the same environment/generation
-   and correspondence arguments, plus `--targets`, `--observations`, optional
-   `--refinements`, and a new `--output`. It rechecks creator identities and due
-   membership, reads the complete authorized taxonomy, and searches history
+3. Run `source` with the target receipt. Runtime selects
+   `creator-invitation-observation-source/v2` version `2` and returns private
+   instructions bound to the complete manifest. The host follows those
+   instructions only after separately confirming its current actor, session and
+   agency; correlation does not establish any of them. Store the private
+   handoff, then run `source-plan` with the receipt, handoff and returned result.
+   It accepts only a correlated done result in
+   `invitation-eligibility-observations/v2`, preserves request/binding/result
+   digests, and then uses the same plan path below. Synthetic or historical
+   output never authorizes an observation. `planSha256` retains its existing
+   scope over the core plan result; it does not cover additive source provenance.
+4. `source-plan` takes `--targets`, `--source-handoff`, `--source-result`,
+   optional `--refinements`, and a new `--output`; the existing narrower `plan`
+   takes `--targets` and `--observations`. Both recheck the same
+   environment/generation and correspondence arguments, creator identities and due
+   membership, read the complete authorized taxonomy, and search history
    only for target IDs. Zero targets or unresolved classification causes zero
    history requests. Service acquisition limits belong to the Provider.
 5. Inspect `status`, `classification`, `plan`, `reads` and `planSha256`. The plan
@@ -118,9 +127,11 @@ and the user's selected order. No implicit 100-target cap is introduced.
    changes, conflicting identity/latest-time stops, and due freshness checks.
    `blocked` must be resolved; it is not permission to omit affected rows.
 
-Programmatic callers use `prepareEnvironmentInvitationTargets` and
-`prepareEnvironmentInvitationPlan` from the package's `./environment` export,
-passing the explicitly selected Runtime `access` and correspondence object.
+Programmatic callers use `prepareEnvironmentInvitationTargets`,
+`prepareEnvironmentInvitationSource`, `prepareEnvironmentInvitationSourcePlan`,
+and `prepareEnvironmentInvitationPlan` from the package's `./environment` export.
+The raw normalized-observation route retains its narrower assurance; only the
+source route records Runtime instruction correlation.
 The CLI additionally checks private-file permissions and fixed input bytes.
 
 ## Human review, failures and recovery
