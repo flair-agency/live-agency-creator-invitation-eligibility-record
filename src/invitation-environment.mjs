@@ -170,10 +170,10 @@ export async function prepareEnvironmentInvitationPlan({access, configuration, t
   catch (cause) { throw Object.assign(new TypeError('INVITATION_OBSERVATIONS_INVALID', {cause}), {
     code:'INVITATION_OBSERVATIONS_INVALID', stage:'observations', reason:cause.message}); }
   const live = await s.read(c.creators, c.creators.queries.all);
-  const byId = new Map(live.map(row => [row.recordId,row]));
+  const byId = new Map(creatorTargets(live, c.creators.fields.account).map(row => [row.creatorRecordId,row]));
   for (const row of manifest.rows) {
-    const value = byId.get(row.creatorRecordId)?.values[c.creators.fields.account];
-    requireValue(text(value) && normalizeAccountKey(value) === normalizeAccountKey(row.accountKey),
+    const liveTarget = byId.get(row.creatorRecordId);
+    requireValue(liveTarget && liveTarget.accountKey === normalizeAccountKey(row.accountKey),
       'INVITATION_TARGET_CHANGED', 'targets');
   }
   const due = manifest.targetMode === 'due' ? new Set((await s.read(c.creators, c.creators.queries.due)).map(row => row.recordId)) : null;

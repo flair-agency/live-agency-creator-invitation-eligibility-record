@@ -33,12 +33,71 @@ export function parseArgs(argv) {
   return args;
 }
 
+function rejectDuplicateJsonMembers(source) {
+  let index = 0;
+  const whitespace = () => { while (/\s/.test(source[index] ?? '')) index += 1; };
+  const string = () => {
+    const start = index++;
+    while (index < source.length) {
+      if (source[index++] === '"') return JSON.parse(source.slice(start, index));
+      if (source[index - 1] === '\\') index += 1;
+    }
+    throw new SyntaxError('unterminated JSON string');
+  };
+  const value = () => {
+    whitespace();
+    if (source[index] === '{') {
+      index += 1; whitespace();
+      const members = new Set();
+      if (source[index] === '}') { index += 1; return; }
+      while (true) {
+        if (source[index] !== '"') throw new SyntaxError('JSON object key is invalid');
+        const key = string();
+        if (members.has(key)) throw Object.assign(new TypeError('INVITATION_CONFIGURATION_DUPLICATE_MEMBER'), {
+          code:'INVITATION_CONFIGURATION_DUPLICATE_MEMBER', stage:'configuration'});
+        members.add(key); whitespace();
+        if (source[index++] !== ':') throw new SyntaxError('JSON object separator is invalid');
+        value(); whitespace();
+        if (source[index] === '}') { index += 1; return; }
+        if (source[index++] !== ',') throw new SyntaxError('JSON object delimiter is invalid');
+        whitespace();
+      }
+    }
+    if (source[index] === '[') {
+      index += 1; whitespace();
+      if (source[index] === ']') { index += 1; return; }
+      while (true) {
+        value(); whitespace();
+        if (source[index] === ']') { index += 1; return; }
+        if (source[index++] !== ',') throw new SyntaxError('JSON array delimiter is invalid');
+      }
+    }
+    if (source[index] === '"') { string(); return; }
+    const start = index;
+    while (index < source.length && !/[\s,\]}]/.test(source[index])) index += 1;
+    if (start === index) throw new SyntaxError('JSON value is invalid');
+  };
+  value(); whitespace();
+  if (index !== source.length) throw new SyntaxError('JSON trailing content is invalid');
+}
+
+export function parseInvitationEnvironmentConfiguration(source) {
+  try {
+    rejectDuplicateJsonMembers(source);
+    return JSON.parse(source);
+  } catch (error) {
+    if (error.code === 'INVITATION_CONFIGURATION_DUPLICATE_MEMBER') throw error;
+    throw Object.assign(new TypeError(`INVITATION_CONFIGURATION_INVALID: ${error.message}`), {
+      code:'INVITATION_CONFIGURATION_INVALID', stage:'configuration'});
+  }
+}
+
 export async function run(args, {createAccess} = {}) {
   const bytes = await readPrivateText(args.configuration);
   if (createHash('sha256').update(bytes).digest('hex') !== args['configuration-sha256']) {
     throw Object.assign(new Error('INVITATION_CONFIGURATION_CHANGED'), {code:'INVITATION_CONFIGURATION_CHANGED', stage:'configuration'});
   }
-  const configuration = JSON.parse(bytes);
+  const configuration = parseInvitationEnvironmentConfiguration(bytes);
   createAccess ??= (await import('@flair-agency/live-agency-runtime/environment')).createEnvironmentAccess;
   const access = await createAccess(args.environment, {expectedGeneration:args.generation, ...(args.platform ? {platform:args.platform} : {})});
   const result = args.operation === 'targets'

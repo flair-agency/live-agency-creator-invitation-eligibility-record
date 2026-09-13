@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { prepareEnvironmentInvitationTargets as targets, prepareEnvironmentInvitationPlan as plan } from '../src/invitation-environment.mjs';
 import { buildClassifiedInvitationRefreshPlanFromHistory } from '../src/invitation-classification.mjs';
-import { parseArgs, run } from '../scripts/invitation_environment.mjs';
+import { parseArgs, parseInvitationEnvironmentConfiguration, run } from '../scripts/invitation_environment.mjs';
 import { exportTargets } from '../scripts/invitation_lark_runtime.mjs';
 
 const selection = {environmentId:'test',environmentKind:'development',platformId:'synthetic',generation:'a'.repeat(64)};
@@ -96,6 +96,13 @@ test('due membership and target identity are rechecked; zero targets make zero h
   assert.equal(empty.calls.filter(r=>r.input.dataset==='history').length,0);
 });
 
+test('planning rechecks normalized account uniqueness across every live creator before history reads',async()=>{
+  const f=fixture(), t=await one(f);
+  const changed=fixture({people:[person('p1','one'),person('p2','@ＯＮＥ')]});
+  await assert.rejects(plan({...changed,targets:t,observations:observations()}),{code:'INVITATION_CREATOR_AMBIGUOUS'});
+  assert.equal(changed.calls.filter(r=>r.input.dataset==='history').length,0);
+});
+
 test('failed, partial, uncorrelated and changed-configuration reads never become empty success',async t=>{
   for (const [name,modify,code] of [
     ['failure',r=>{r.result.status='failed';delete r.result.output;r.result.error={code:'AUTH_FAILED',message:'authentication failed',details:{stage:'token'}};},'INVITATION_DATASET_READ_FAILED'],
@@ -164,4 +171,13 @@ test('CLI requires pinned explicit inputs, writes private receipt and detects co
   for(const extra of [['--mode','all'],['--apply','true'],['--limit','0']]) assert.throws(()=>parseArgs([...args,...extra]));
   await writeFile(conf,bytes+'\n');
   await assert.rejects(run(parsed,{createAccess:async()=>assert.fail('configuration mismatch must precede Runtime')}),{code:'INVITATION_CONFIGURATION_CHANGED'});
+});
+
+test('private correspondence JSON rejects duplicate members before parsing, including escaped equivalents',()=>{
+  assert.throws(() => parseInvitationEnvironmentConfiguration('{"outer":{"member":1,"member":2}}'),
+    {code:'INVITATION_CONFIGURATION_DUPLICATE_MEMBER'});
+  assert.throws(() => parseInvitationEnvironmentConfiguration('{"outer":{"a":1,"\\u0061":2}}'),
+    {code:'INVITATION_CONFIGURATION_DUPLICATE_MEMBER'});
+  assert.deepEqual(parseInvitationEnvironmentConfiguration('{"first":{"member":1},"second":{"member":2}}'),
+    {first:{member:1},second:{member:2}});
 });
