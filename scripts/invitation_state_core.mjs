@@ -148,7 +148,8 @@ export function buildRefreshPlanFromHistory({ observations, manifest, storedHist
     if (!row || !["recordId", "creatorRecordId", "state", "externalUserId", "nickname"]
       .every((key) => typeof row[key] === "string") ||
       !Number.isSafeInteger(row.observedAtMs) || row.observedAtMs < 1 ||
-      !Array.isArray(row.avatarHashes) || !row.avatarHashes.every((value) => typeof value === "string")) {
+      !Array.isArray(row.avatarHashes) ||
+      !row.avatarHashes.every((value) => typeof value === "string" && value.trim().length > 0)) {
       invalid.push({ recordId: String(row?.recordId ?? ""), reason: "normalized stored state is invalid" });
       continue;
     }

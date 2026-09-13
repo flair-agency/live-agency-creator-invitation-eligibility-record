@@ -70,7 +70,7 @@ Each `storedHistory` row uses the existing hydrated history representation:
 | `state` | Exact destination state label, as a string |
 | `externalUserId`, `nickname` | Strings; retain the existing trimming and nickname NFKC normalization |
 | `observedAtMs` | Positive safe-integer observation time in epoch milliseconds |
-| `avatarHashes` | Array of content-hash strings; comparison retains the existing unique, sorted values |
+| `avatarHashes` | Array of nonblank content-hash strings; comparison retains the existing unique, sorted values. An empty array means no attachment; a blank hash is invalid history, not a missing attachment. |
 
 The selected caller supplies normalized history and retains rejected source rows
 in `invalidStored` (existing `{recordId, reason}` diagnostics). The helper also

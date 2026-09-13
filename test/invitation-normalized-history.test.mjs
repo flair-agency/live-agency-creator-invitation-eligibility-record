@@ -73,6 +73,34 @@ test('invalid source history and malformed normalized rows remain blocking evide
   assert.throws(() => buildRefreshPlanFromHistory({ observations: observation, manifest, storedHistory: null }), /arrays/);
 });
 
+test('malformed avatar hashes remain blocking instead of becoming missing attachments', () => {
+  const observations = structuredClone(observation);
+  observations.creators[0].avatar = avatar;
+  const invalidStored = [{ recordId: 'recRejected', reason: 'synthetic source rejection' }];
+  for (const avatarHashes of [[''], [' '], [null], [avatar.sha256, '']]) {
+    const storedHistory = [{ ...state, observedAtMs: time, avatarHashes }];
+    const before = structuredClone({ storedHistory, invalidStored });
+    const plan = buildRefreshPlanFromHistory({ observations, manifest, storedHistory, invalidStored });
+    assert.deepEqual(plan.invalidStored, [...invalidStored,
+      { recordId: state.recordId, reason: 'normalized stored state is invalid' }]);
+    assert.equal(hasBlockingRefreshIssues(plan), true);
+    assert.equal(plan.attachExisting.length, 0);
+    assert.deepEqual({ storedHistory, invalidStored }, before);
+  }
+});
+
+test('normalized history retains nonblank legacy hash values without imposing a new format', async () => {
+  const avatarHashes = ['synthetic-hash-b', 'synthetic-hash-a', 'synthetic-hash-b'];
+  const legacy = await buildRefreshPlan({ observations: observation, manifest, bindings,
+    storedRecords: [{ ...record, fields: { ...record.fields,
+      avatar: avatarHashes.map(syntheticHash => ({ syntheticHash })) } }],
+    resolveAttachmentHash: async attachment => attachment.syntheticHash });
+  const normalized = buildRefreshPlanFromHistory({ observations: observation, manifest,
+    storedHistory: [{ ...state, avatarHashes }] });
+  assert.deepEqual(normalized, legacy);
+  assert.equal(hasBlockingRefreshIssues(normalized), false);
+});
+
 test('classified normalized planning preserves category selection and existing plan output', async () => {
   const statuses = [{ id: 'root', label: 'synthetic-parent', parentId: null },
     { id: 'basic', label: 'synthetic-basic-child', parentId: 'root', invitationCategory: 'synthetic-basic' },
