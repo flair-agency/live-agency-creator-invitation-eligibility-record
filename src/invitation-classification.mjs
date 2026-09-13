@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { validateInvitationEligibilityObservationsV2 } from './contracts.mjs';
-import { normalizeAccountKey, validateTargetManifest, buildRefreshPlan } from '../scripts/invitation_state_core.mjs';
+import { normalizeAccountKey, validateTargetManifest, buildRefreshPlan, buildRefreshPlanFromHistory } from '../scripts/invitation_state_core.mjs';
 
 const check = (ok, message) => { if (!ok) throw new TypeError(message); };
 const text = value => typeof value === 'string' && value.trim().length > 0;
@@ -74,5 +74,13 @@ export function classifyInvitationEligibilityObservations({ observations, manife
 export async function buildClassifiedInvitationRefreshPlan({ observations, manifest, statuses, refinements = [], ...inputs }) {
   const classification = classifyInvitationEligibilityObservations({ observations, manifest, statuses, refinements });
   const plan = classification.blocked ? null : await buildRefreshPlan({ ...inputs, manifest, observations: classification.observations });
+  return { classification, plan };
+}
+
+export function buildClassifiedInvitationRefreshPlanFromHistory({ observations, manifest, statuses, refinements = [], storedHistory, invalidStored = [] }) {
+  const classification = classifyInvitationEligibilityObservations({ observations, manifest, statuses, refinements });
+  const plan = classification.blocked ? null : buildRefreshPlanFromHistory({
+    manifest, observations: classification.observations, storedHistory, invalidStored,
+  });
   return { classification, plan };
 }

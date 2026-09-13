@@ -19,6 +19,9 @@ this Skill chooses a configured child only from that category or explicit
 reviewed refinement evidence. The new helper is pure planning, not an execution
 or selected-environment entry. Existing v1 routes remain compatible but cannot
 preserve category and are insufficient for category-preserving migration acceptance.
+For supplied normalized history, the reference also documents the pure
+`buildClassifiedInvitationRefreshPlanFromHistory` entry; it requires no datastore
+client or service field bindings.
 
 New observations describe whether the platform permits an invitation at the
 observation time. They do not describe the agency's scouting target decision,

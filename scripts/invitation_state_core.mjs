@@ -132,6 +132,40 @@ export async function buildRefreshPlan({ observations, manifest, storedRecords, 
       invalidStored.push({ recordId: String(record?.record_id ?? ""), reason: error.message });
     }
   }
+  return planRefresh(normalized, stored, invalidStored);
+}
+
+// The selected datastore normalizes service values before this business boundary.
+// Preserve rejected source rows so incomplete history cannot become a clean plan.
+export function buildRefreshPlanFromHistory({ observations, manifest, storedHistory, invalidStored = [] }) {
+  const normalized = normalizeObservations(observations, manifest);
+  if (!Array.isArray(storedHistory) || !Array.isArray(invalidStored)) {
+    throw new TypeError("normalized history and invalidStored must be arrays");
+  }
+  const stored = [];
+  const invalid = structuredClone(invalidStored);
+  for (const row of storedHistory) {
+    if (!row || !["recordId", "creatorRecordId", "state", "externalUserId", "nickname"]
+      .every((key) => typeof row[key] === "string") ||
+      !Number.isSafeInteger(row.observedAtMs) || row.observedAtMs < 1 ||
+      !Array.isArray(row.avatarHashes) || !row.avatarHashes.every((value) => typeof value === "string")) {
+      invalid.push({ recordId: String(row?.recordId ?? ""), reason: "normalized stored state is invalid" });
+      continue;
+    }
+    stored.push({
+      recordId: row.recordId,
+      creatorRecordId: row.creatorRecordId,
+      state: row.state,
+      externalUserId: row.externalUserId.trim(),
+      nickname: row.nickname.normalize("NFKC").trim(),
+      observedAtMs: row.observedAtMs,
+      avatarHashes: canonicalHashes(row.avatarHashes),
+    });
+  }
+  return planRefresh(normalized, stored, invalid);
+}
+
+function planRefresh(normalized, stored, invalidStored) {
   const byCreator = new Map();
   for (const state of stored) {
     const rows = byCreator.get(state.creatorRecordId) ?? [];

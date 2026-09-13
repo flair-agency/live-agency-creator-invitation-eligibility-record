@@ -12,10 +12,11 @@ flowchart TD
   Taxonomy[Explicit destination taxonomy] --> Classify
   Evidence[Reviewed additional evidence, when supplied] --> Classify
   Classify --> Plan[Existing history plan]
+  History[Normalized stored history and rejected rows] --> Plan
 ```
 
-The planning helper follows this flow without performing external operations.
-Its selected-environment connection is not yet implemented.
+The planning helpers follow this flow without performing external operations.
+Their selected-environment connection is not yet implemented.
 
 # Inputs and procedure
 
@@ -38,10 +39,12 @@ Its selected-environment connection is not yet implemented.
    reviewed private evidence; nonempty text alone does not prove its truth.
    A refinement must remain under the observed root and cannot contradict a
    category-selected child. Without evidence, do not infer a risk or other child.
-4. Import `classifyInvitationEligibilityObservations` or
-   `buildClassifiedInvitationRefreshPlan` from the package export
-   `./invitation-classification`. The latter accepts the existing
-   `buildRefreshPlan` inputs plus v2 observations, statuses and refinements.
+4. Import `classifyInvitationEligibilityObservations`,
+   `buildClassifiedInvitationRefreshPlanFromHistory`, or the existing
+   `buildClassifiedInvitationRefreshPlan` from `./invitation-classification`.
+   For supplied normalized history, use the `FromHistory` helper described below.
+   The existing helper keeps the `buildRefreshPlan` inputs plus v2 observations,
+   statuses and refinements for compatibility with the legacy service adapter.
    Inspect its `{classification, plan}` result. The classifier returns a
    structural state snapshot for the old algorithm, never falsely relabels it
    as typed v1 source evidence, and preserves identity/avatar metadata.
@@ -50,6 +53,43 @@ Its selected-environment connection is not yet implemented.
    updates, attachments and blocking issues. The input hash covers observations,
    target manifest, taxonomy and refinements; changes require fresh review.
    These hashes detect change and supply no execution authority.
+
+# Planning from normalized history
+
+`buildClassifiedInvitationRefreshPlanFromHistory` accepts `observations`,
+`manifest`, `statuses`, optional `refinements`, `storedHistory`, and optional
+`invalidStored`. It returns the same `{classification, plan}` as the legacy
+helper for equivalent inputs. This separates the history decision from service
+response parsing; do not manufacture service-shaped records to call the old path.
+
+Each `storedHistory` row uses the existing hydrated history representation:
+
+| Fields | Meaning |
+| --- | --- |
+| `recordId`, `creatorRecordId` | Stored history and linked creator identifiers, as strings |
+| `state` | Exact destination state label, as a string |
+| `externalUserId`, `nickname` | Strings; retain the existing trimming and nickname NFKC normalization |
+| `observedAtMs` | Positive safe-integer observation time in epoch milliseconds |
+| `avatarHashes` | Array of content-hash strings; comparison retains the existing unique, sorted values |
+
+The selected caller supplies normalized history and retains rejected source rows
+in `invalidStored` (existing `{recordId, reason}` diagnostics). The helper also
+adds malformed normalized rows to `plan.invalidStored`. These remain blocking
+under `hasBlockingRefreshIssues` from `./scripts/invitation_state_core`, even if
+other rows yield candidate effects. Missing history input is rejected rather
+than treated as an empty table. Do not discard rejected rows to obtain a plan.
+
+For an already classified structural observation snapshot, the same package
+export provides `buildRefreshPlanFromHistory` with `observations`, `manifest`,
+`storedHistory` and optional `invalidStored`. Both paths use the existing history
+decision algorithm. The legacy `buildRefreshPlan` and service routes retain their
+existing inputs and behavior.
+
+These inputs do not select a Provider capability, establish historical meaning,
+verify source completeness or authorize a write. Actual source normalization,
+scoped acquisition and the reviewed taxonomy/evidence remain caller prerequisites;
+their selected-environment connection is still unimplemented. If a source row
+cannot be normalized, preserve its diagnostic and resolve it before applying.
 
 # Synthetic examples and exceptions
 
