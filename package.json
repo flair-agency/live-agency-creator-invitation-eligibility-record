@@ -14,7 +14,9 @@
     "./scripts/export_invitation_targets": "./scripts/export_invitation_targets.mjs",
     "./scripts/sync_invitation_observations": "./scripts/sync_invitation_observations.mjs",
     "./contracts": "./src/contracts.mjs",
-    "./invitation-classification": "./src/invitation-classification.mjs"
+    "./invitation-classification": "./src/invitation-classification.mjs",
+    "./environment": "./src/invitation-environment.mjs",
+    "./scripts/invitation_environment": "./scripts/invitation_environment.mjs"
   },
   "files": [
     "SKILL.md",
