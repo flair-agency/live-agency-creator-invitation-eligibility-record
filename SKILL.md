@@ -5,10 +5,12 @@ description: Prepare targets and record normalized invitation-eligibility observ
 
 # Record invitation eligibility observations
 
-Maintain transition-based invitation-status history in Lark without embedding
-knowledge of the observation service. The public core knows only a versioned
-normalized observation contract and Lark field IDs supplied by private local
-configuration.
+Maintain transition-based invitation-status history without embedding knowledge
+of the observation service. For a saved v2 environment, use the
+[selected-environment read and plan workflow](references/environment-workflow.md).
+It consumes logical datasets and reviewed private classification correspondence;
+the selected datastore Provider owns service columns and their representations.
+The legacy Lark client routes below remain compatibility paths.
 
 ## Adopted meaning and legacy history
 
@@ -16,8 +18,10 @@ For category-preserving planning, explicitly select the v2 normalized contract
 and read [classification and evidence](references/invitation-classification.md).
 The Provider supplies the observed parent eligibility and invitation category;
 this Skill chooses a configured child only from that category or explicit
-reviewed refinement evidence. The new helper is pure planning, not an execution
-or selected-environment entry. Existing v1 routes remain compatible but cannot
+reviewed refinement evidence. The classification helper is pure planning;
+`scripts/invitation_environment.mjs` connects selected-environment reads to that
+same planning core. It provides `targets` and `plan`, with no write command.
+Existing v1 routes remain compatible but cannot
 preserve category and are insufficient for category-preserving migration acceptance.
 For supplied normalized history, the reference also documents the pure
 `buildClassifiedInvitationRefreshPlanFromHistory` entry; it requires no datastore
@@ -34,7 +38,7 @@ destination option alone does not establish that meaning. Stop if the selected
 source mixes eligibility with sent-invitation progress or leaves the meaning
 unresolved. The legacy structural validator does not prove this distinction.
 
-For a new selected eligibility composition, use the explicit
+For a legacy explicit-client eligibility composition, use the explicit
 `invitation-eligibility-observations/v1` input and
 `scripts/invitation_eligibility_runtime.mjs`. Its version 3 plans bind the
 destination and current fields as well as the original typed observations.
@@ -70,8 +74,13 @@ This skill's transition, approval, and avatar rules remain mandatory.
 
 ## Source boundary
 
-Prepare the requested creator accounts from Lark, then obtain observations in
-one of two ways:
+For the saved v2 environment, follow the selected-environment workflow linked
+above: accept the reviewed source's explicit v2 normalized observations without
+converting a legacy state string into source evidence. The new read/plan entry
+does not acquire observations or implement source handoff.
+
+For legacy client routes, prepare the requested creator accounts from Lark,
+then obtain observations in one of two ways:
 
 1. accept normalized JSON conforming to
    [references/normalized-observation-schema.md](references/normalized-observation-schema.md); or
@@ -96,8 +105,9 @@ skill.
 
 - Match every requested account exactly once after Unicode NFKC, leading `@`
   removal, trimming, and case folding. Reject missing, extra, or duplicate rows.
-- Treat the observation `state` as an opaque normalized value. At runtime,
-  require an exact option with that name in the configured Lark state field.
+- Treat the classified `state` as an opaque normalized value. The selected v2
+  route requires exact correspondence to the configured taxonomy; legacy Lark
+  routes also require an exact option in their configured state field.
 - Compare creator, exact state, external user ID, nickname, and avatar content.
   Ignore only the stored record ID and observation timestamp.
 - When the newest stored state is identical, update only its timestamp.
