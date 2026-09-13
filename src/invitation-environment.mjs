@@ -7,7 +7,12 @@ import { classifyInvitationEligibilityObservations } from './invitation-classifi
 import { normalizeAccountKey, validateTargetManifest, hasBlockingRefreshIssues, buildRefreshPlanFromHistory } from '../scripts/invitation_state_core.mjs';
 
 export const DATASET_READ = 'record-dataset-read/v1';
-// TODO: selected source handoff (#6) and reviewed write/readback (#14) remain separate connections.
+export const INVITATION_SOURCE = 'creator-invitation-observation-source/v2';
+export const INVITATION_SOURCE_INPUT_KIND = 'application/vnd.live-agency.creator-invitation-targets+json';
+// TODO: https://github.com/flair-agency/live-agency/issues/6
+// Runtime correlation binds this handoff to a selected instruction Provider;
+// it cannot establish current human/session/agency or source-row ownership.
+// TODO: reviewed write/readback (#14) remains a separate connection.
 // https://github.com/flair-agency/live-agency/issues/14
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -138,6 +143,83 @@ export async function prepareEnvironmentInvitationTargets({access, configuration
   return {...receipt, receiptSha256:hash(receipt)};
 }
 
+function checkedReceipt(access, configuration, targets) {
+  const {receiptSha256, ...receipt} = structuredClone(targets);
+  requireValue(receiptSha256 === hash(receipt), 'INVITATION_TARGET_RECEIPT_CHANGED', 'targets');
+  const s = readSession(access, configuration, receipt);
+  const manifest = validateTargetManifest(receipt.manifest);
+  requireValue(manifest.rowsSha256 === rowsHash(manifest.rows), 'INVITATION_TARGET_RECEIPT_CHANGED', 'targets');
+  return {receiptSha256, receipt, s, manifest};
+}
+
+function checkedSourceHandoff(access, configuration, targets, sourceHandoff) {
+  const {handoffSha256, ...handoff} = structuredClone(sourceHandoff);
+  requireValue(handoffSha256 === hash(handoff), 'INVITATION_SOURCE_HANDOFF_CHANGED', 'source');
+  const checked = checkedReceipt(access, configuration, targets);
+  requireValue(handoff.version === 1 && same(handoff.selection, checked.s.selection) &&
+    handoff.configurationFingerprint === checked.s.configurationFingerprint &&
+    handoff.targetReceiptSha256 === checked.receiptSha256 && same(handoff.request?.context, checked.s.selection) &&
+    handoff.request?.capability === INVITATION_SOURCE && handoff.request?.version === '2' &&
+    handoff.request?.inputKind === INVITATION_SOURCE_INPUT_KIND && same(handoff.request?.input, checked.manifest) &&
+    handoff.requestSha256 === hash(handoff.request) && object(handoff.binding) && text(handoff.instructions),
+  'INVITATION_SOURCE_HANDOFF_CHANGED', 'source');
+  return {...checked, handoff};
+}
+
+export async function prepareEnvironmentInvitationSource({access, configuration, targets}) {
+  const {receiptSha256, s, manifest} = checkedReceipt(access, configuration, targets);
+  const request = {requestId:randomUUID(), capability:INVITATION_SOURCE, version:'2', context:s.selection,
+    inputKind:INVITATION_SOURCE_INPUT_KIND, input:structuredClone(manifest)};
+  const reply = await access.invoke(request);
+  requireValue(same(s.selection, access.selection) && same(reply?.selection, s.selection),
+    'INVITATION_SELECTION_MISMATCH', 'source');
+  try { validateProviderResult(reply?.result, request); }
+  catch (cause) { throw Object.assign(new TypeError('INVITATION_SOURCE_PROTOCOL_INVALID', {cause}), {
+    code:'INVITATION_SOURCE_PROTOCOL_INVALID', stage:'source', reason:cause.message}); }
+  requireValue(object(reply.binding) && ['packageName','packageVersion','bindingId','knowledgeVersion'].every(key => text(reply.binding[key])),
+    'INVITATION_SOURCE_BINDING_INVALID', 'source');
+  if (reply.result.status === 'failed') {
+    throw Object.assign(new Error('INVITATION_SOURCE_FAILED'), {code:'INVITATION_SOURCE_FAILED', stage:'source',
+      requestId:request.requestId, providerCode:reply.result.error.code, providerError:structuredClone(reply.result.error)});
+  }
+  requireValue(reply.result.status === 'interaction-required' && text(reply.result.instructions),
+    'INVITATION_SOURCE_INSTRUCTIONS_INVALID', 'source');
+  const handoff = {version:1, selection:s.selection, configurationFingerprint:s.configurationFingerprint,
+    targetReceiptSha256:receiptSha256, request,
+    binding:structuredClone(reply.binding), instructions:reply.result.instructions, requestSha256:hash(request)};
+  return {...handoff, handoffSha256:hash(handoff)};
+}
+
+export async function prepareEnvironmentInvitationSourcePlan({access, configuration, targets, sourceHandoff, sourceResult, refinements = []}) {
+  const {handoff} = checkedSourceHandoff(access, configuration, targets, sourceHandoff);
+  requireValue(typeof access?.validateInstructionResult === 'function', 'INVITATION_SOURCE_VALIDATOR_MISSING', 'source');
+  let validated;
+  try { validated = await access.validateInstructionResult(handoff.request, structuredClone(sourceResult)); }
+  catch (cause) { throw Object.assign(new TypeError('INVITATION_SOURCE_RESULT_INVALID', {cause}), {
+    code:'INVITATION_SOURCE_RESULT_INVALID', stage:'source', reason:cause.message}); }
+  requireValue(same(validated?.selection, handoff.selection) && same(validated?.binding, handoff.binding) &&
+    same(access.selection, handoff.selection) && validated.verification === 'request-result-correlation-only',
+  'INVITATION_SOURCE_BINDING_CHANGED', 'source');
+  try { validateProviderResult(validated.result, handoff.request); }
+  catch (cause) { throw Object.assign(new TypeError('INVITATION_SOURCE_RESULT_INVALID', {cause}), {
+    code:'INVITATION_SOURCE_RESULT_INVALID', stage:'source', reason:cause.message}); }
+  if (validated.result.status === 'failed') {
+    throw Object.assign(new Error('INVITATION_SOURCE_FAILED'), {code:'INVITATION_SOURCE_FAILED', stage:'source',
+      requestId:handoff.request.requestId, providerCode:validated.result.error.code, providerError:structuredClone(validated.result.error)});
+  }
+  requireValue(validated.result.status === 'done', 'INVITATION_SOURCE_RESULT_INCOMPLETE', 'source');
+  try { validateInvitationEligibilityObservationsV2(validated.result.output); }
+  catch (cause) { throw Object.assign(new TypeError('INVITATION_OBSERVATIONS_INVALID', {cause}), {
+    code:'INVITATION_OBSERVATIONS_INVALID', stage:'source', reason:cause.message}); }
+  const result = await prepareEnvironmentInvitationPlan({access, configuration, targets,
+    observations:validated.result.output, refinements});
+  const sourceProvenance = {requestSha256:handoff.requestSha256, binding:handoff.binding,
+    resultSha256:hash(validated.result), verification:validated.verification};
+  // Keep the established plan hash over the existing plan result. Provenance is
+  // additive evidence for this source route, not a silent hash-scope change.
+  return {...result, sourceProvenance};
+}
+
 async function verifyAvatars(observations) {
   for (const row of observations.creators) {
     if (!row.avatar) continue;
@@ -160,11 +242,7 @@ async function verifyAvatars(observations) {
 }
 
 export async function prepareEnvironmentInvitationPlan({access, configuration, targets, observations, refinements = []}) {
-  const {receiptSha256, ...receipt} = structuredClone(targets);
-  requireValue(receiptSha256 === hash(receipt), 'INVITATION_TARGET_RECEIPT_CHANGED', 'targets');
-  const s = readSession(access, configuration, receipt), c = s.config;
-  const manifest = validateTargetManifest(receipt.manifest);
-  requireValue(manifest.rowsSha256 === rowsHash(manifest.rows), 'INVITATION_TARGET_RECEIPT_CHANGED', 'targets');
+  const {receiptSha256, s, manifest} = checkedReceipt(access, configuration, targets), c = s.config;
   observations = structuredClone(observations); refinements = structuredClone(refinements);
   try { validateInvitationEligibilityObservationsV2(observations); }
   catch (cause) { throw Object.assign(new TypeError('INVITATION_OBSERVATIONS_INVALID', {cause}), {

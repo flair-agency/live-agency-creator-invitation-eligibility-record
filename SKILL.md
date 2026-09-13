@@ -75,9 +75,13 @@ This skill's transition, approval, and avatar rules remain mandatory.
 ## Source boundary
 
 For the saved v2 environment, follow the selected-environment workflow linked
-above: accept the reviewed source's explicit v2 normalized observations without
-converting a legacy state string into source evidence. The new read/plan entry
-does not acquire observations or implement source handoff.
+above. Its `source` and `source-plan` entries ask Runtime for the selected
+private v2 source instructions, preserve the correlated private handoff, and
+admit only its v2 result before the existing planner. The host separately
+confirms actor, session and agency; request/result correlation does not prove
+live observation, identity or avatar ownership. The raw normalized-plan entry
+remains available with narrower assurance and never promotes legacy state into
+source evidence.
 
 For legacy client routes, prepare the requested creator accounts from Lark,
 then obtain observations in one of two ways:
