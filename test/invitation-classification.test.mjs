@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { classifyInvitationEligibilityObservations as classify, buildClassifiedInvitationRefreshPlan as build } from '../src/invitation-classification.mjs';
-import { validateInvitationEligibilityObservations as v1, validateInvitationEligibilityObservationsV2 as v2 } from '../src/contracts.mjs';
+import { classifyInvitationEligibilityObservations as classify, classifyInvitationEligibilityObservationsV3 as classifyV3, buildClassifiedInvitationRefreshPlan as build } from '../src/invitation-classification.mjs';
+import { validateInvitationEligibilityObservations as v1, validateInvitationEligibilityObservationsV2 as v2, validateInvitationEligibilityObservationsV3 as v3 } from '../src/contracts.mjs';
 const statuses = [
   {id:'root',label:'synthetic-parent',parentId:null},
   {id:'basic',label:'synthetic-basic-child',parentId:'root',invitationCategory:'synthetic-basic'},
@@ -82,4 +82,18 @@ test('existing history algorithm creates on category change and updates only tim
   const changed=await build({observations:snapshot('synthetic-premium'),manifest,statuses,bindings,storedRecords});
   assert.equal(changed.plan.creates.length,1);assert.equal(changed.plan.updates.length,0);assert.equal(changed.plan.creates[0].state,'synthetic-premium-child');
   assert.deepEqual({bindings,storedRecords},before);
+});
+test('v3 keeps an unknown raw reason out of classification, fails closed on unknown status, and requires an explicit compliance rule',()=>{
+  const source = {contractVersion:'invitation-eligibility-observations/v3',observedAt:'2030-01-02T03:04:05Z',rowCount:1,
+    creators:[{accountKey:'synthetic.creator',result:'observed',status:'synthetic-parent',reason:null,invitationCategory:null}]};
+  assert.equal(v3(source),source);
+  const unknownReason=structuredClone(source);unknownReason.creators[0].status='対象外';unknownReason.creators[0].reason='new source wording';
+  const ineligibleStatuses=[...statuses,{id:'ineligible',label:'対象外',parentId:null}];
+  assert.equal(classifyV3({observations:unknownReason,manifest,statuses:ineligibleStatuses}).blocked,false);
+  const unknownStatus=structuredClone(source);unknownStatus.creators[0].status='unrecognized';assert.throws(()=>classifyV3({observations:unknownStatus,manifest,statuses}),/root/);
+  const compliance=structuredClone(unknownReason);compliance.creators[0].reason='preserved';compliance.creators[0].complianceSignals=['multiple_account_risk'];
+  assert.equal(classifyV3({observations:compliance,manifest,statuses:ineligibleStatuses}).blocked,true);
+  const withRule=classifyV3({observations:compliance,manifest,statuses:[...ineligibleStatuses,{id:'risk',label:'risk-reviewed',parentId:'ineligible'}],complianceRules:[{signal:'multiple_account_risk',statusId:'risk',evidenceRef:'synthetic-policy'}]});
+  assert.equal(withRule.blocked,false);assert.equal(withRule.observedReasons[0].reason,'preserved');assert.equal(withRule.observations.creators[0].state,'risk-reviewed');
+  const legacy={...source,contractVersion:'invitation-eligibility-observations/v1',creators:[{accountKey:'synthetic.creator',result:'observed',eligibility:'その他の理由'}]};assert.equal(v1(legacy),legacy);
 });

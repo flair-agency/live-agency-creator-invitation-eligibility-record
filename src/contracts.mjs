@@ -119,6 +119,29 @@ export function validateInvitationObservations(snapshot) {
 export const INVITATION_ELIGIBILITY_CONTRACT = "invitation-eligibility-observations/v1";
 
 export const INVITATION_ELIGIBILITY_CONTRACT_V2 = "invitation-eligibility-observations/v2";
+export const INVITATION_ELIGIBILITY_CONTRACT_V3 = "invitation-eligibility-observations/v3";
+
+// v3 carries an opaque source reason separately.  This public contract never
+// interprets that text; source-specific correspondence remains in the Provider.
+export function validateInvitationEligibilityObservationsV3(snapshot) {
+  assertObject(snapshot, "invitation eligibility observations");
+  if (snapshot.contractVersion !== INVITATION_ELIGIBILITY_CONTRACT_V3 || !Array.isArray(snapshot.creators)) {
+    throw new TypeError("explicit invitation eligibility v3 contract and creators are required");
+  }
+  const v2 = { ...snapshot, contractVersion: INVITATION_ELIGIBILITY_CONTRACT_V2,
+    creators: snapshot.creators.map((row) => {
+      assertObject(row, "eligibility creator");
+      for (const key of Object.keys(row)) if (!['accountKey','result','status','reason','complianceSignals','invitationCategory','externalUserId','nickname','avatar'].includes(key)) throw new TypeError(`unsupported eligibility creator field: ${key}`);
+      if (typeof row.status !== 'string' || !row.status.trim()) throw new TypeError('observed status requires an explicit value');
+      if (!(row.reason === null || (typeof row.reason === 'string' && row.reason.trim()))) throw new TypeError('reason must be null or nonempty text');
+      if (row.status !== '対象外' && row.reason !== null) throw new TypeError('only ineligible status may carry a reason');
+      if (row.complianceSignals !== undefined && (!Array.isArray(row.complianceSignals) || !row.complianceSignals.every(value => ['multiple_account_risk','other_agency_membership'].includes(value)) || new Set(row.complianceSignals).size !== row.complianceSignals.length)) throw new TypeError('invalid compliance signals');
+      const { status, reason, complianceSignals, ...legacy } = row;
+      return { ...legacy, eligibility: status };
+    }) };
+  validateInvitationEligibilityObservationsV2(v2);
+  return snapshot;
+}
 
 // Deliberate opt-in: v1 remains unchanged and never silently discards category.
 export function validateInvitationEligibilityObservationsV2(snapshot) {
