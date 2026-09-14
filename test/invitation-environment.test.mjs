@@ -172,7 +172,7 @@ test('out-of-scope references stop, invalid stored history remains blocked, imag
   const row={recordId:'h1',values:{person:'other',status:'x',uid:'',name:'',time,images:[]}};
   let f=fixture({history:[row]});
   await assert.rejects(plan({...f,targets:await one(f),observations:observations()}),{code:'INVITATION_HISTORY_SCOPE_INVALID'});
-  row.values.person='p1'; row.values.time='invalid'; f=fixture({history:[row]});
+  row.values.person='p1'; row.values.status='eligible-example/one'; row.values.time='invalid'; f=fixture({history:[row]});
   const result=await plan({...f,targets:await one(f),observations:observations()});
   assert.equal(result.status,'blocked'); assert.equal(result.plan.invalidStored.length,1);
   row.values.time=time; row.values.images=null; f=fixture({history:[row]});
@@ -241,7 +241,7 @@ test('selected write maps business roles, forwards execution hooks, and verifies
     if(request.capability!=='record-dataset-write/v1')return original(request);
     let output;
     if(request.input.operation==='prepare') {
-      assert.deepEqual(request.input.plan,{creates:[{fields:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time}}],updates:[],attachments:[],knownExistingIds:[]});
+      assert.deepEqual(request.input.plan,{creates:[{fields:{person:'p1',status:'child',uid:'u1',name:'Name',time}}],updates:[],attachments:[],knownExistingIds:[]});
       output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
     } else {
       if(request.input.operation==='apply') {
@@ -270,8 +270,9 @@ test('selected write maps business roles, forwards execution hooks, and verifies
 test('logical write mapping preserves timestamp-only updates and both image paths',async()=>{
   const {buildEnvironmentInvitationWriteInput}=await import('../src/invitation-environment.mjs');
   const avatar={path:'/private/synthetic.png',size:9,sha256:'d'.repeat(64),name:'synthetic.png',mimeType:'image/png'};
-  const row={creatorRecordId:'p1',state:'eligible-example/one',externalUserId:'u1',nickname:'Name',observedAtMs:time,avatar};
-  const result=buildEnvironmentInvitationWriteInput({configuration,preparedPlan:{planSha256:'e'.repeat(64),knownExistingIds:['h1','h2'],plan:{creates:[row],updates:[{...row,recordId:'h1'}],attachExisting:[{...row,recordId:'h2'}]}}});
+  const row={accountKey:'one',creatorRecordId:'p1',state:'eligible-example/one',externalUserId:'u1',nickname:'Name',observedAtMs:time,avatar};
+  const result=buildEnvironmentInvitationWriteInput({configuration,preparedPlan:{classification:{classifications:[{accountKey:'one',statusId:'child'}]},planSha256:'e'.repeat(64),knownExistingIds:['h1','h2'],plan:{creates:[row],updates:[{...row,recordId:'h1'}],attachExisting:[{...row,recordId:'h2'}]}}});
+  assert.equal(result.plan.creates[0].fields.status,'child');
   assert.deepEqual(result.plan.creates[0].image,{field:'images',...avatar});
   assert.deepEqual(result.plan.updates,[{recordId:'h1',fields:{time}}]);
   assert.deepEqual(result.plan.attachments,[{recordId:'h2',field:'images',image:avatar}]);
@@ -324,4 +325,19 @@ test('CLI write apply persists a private journal before mutation, refuses replay
   assert.equal((await stat(journal)).mode&0o777,0o600);
   await assert.rejects(run(applyArgs,options),{code:'EEXIST'});assert.equal(applied,1);
   assert.equal((await run(parseArgs(['write-reconcile',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'reconcile.json')]),options)).businessWorkflowVerified,true);
+});
+
+test('history status references resolve through the current master; unknown and ambiguous values stop',async()=>{
+  const historic={recordId:'h1',values:{person:'p1',status:'child',uid:'u1',name:'Name',time:time-1000,images:[]}};
+  const f=fixture({history:[historic]}),receipt=await one(f);
+  const prepared=await plan({...f,targets:receipt,observations:observations()});
+  assert.equal(prepared.plan.updates.length,1);
+  assert.equal(prepared.plan.updates[0].state,'eligible-example/one');
+  historic.values.status='unknown-id';
+  await assert.rejects(plan({...f,targets:receipt,observations:observations()}),{code:'INVITATION_HISTORY_STATE_UNRESOLVED'});
+  historic.values.status='child';
+  const ambiguous=fixture({history:[historic],intercept:(reply,request)=>{
+    if(request.input.dataset==='taxonomy')reply.result.output.rows[0].values.title='child';
+  }});
+  await assert.rejects(plan({...ambiguous,targets:await one(ambiguous),observations:observations(['one'],{eligibility:'child'})}),{code:'INVITATION_HISTORY_STATE_UNRESOLVED'});
 });

@@ -278,6 +278,11 @@ export async function prepareEnvironmentInvitationPlan({access, configuration, t
   const storedHistory = history.flatMap(row => {
     const fields = Object.fromEntries(Object.entries(c.history.fields).map(([role,key]) => [role,row.values[key]]));
     requireValue(typeof fields.creatorRecordId === 'string' && allowed.has(fields.creatorRecordId), 'INVITATION_HISTORY_SCOPE_INVALID', 'history');
+    // The dataset returns an opaque status reference; the business core compares labels.
+    // Retained label inputs are admitted only when the same master resolves them uniquely.
+    const stateMatches = statuses.filter(status => status.id === fields.state || status.label === fields.state);
+    requireValue(stateMatches.length === 1, 'INVITATION_HISTORY_STATE_UNRESOLVED', 'history');
+    fields.state = stateMatches[0].label;
     // Optional absence is declared by the Provider; invalid present values remain invalidStored.
     if (fields.externalUserId === null) fields.externalUserId = '';
     if (fields.nickname === null) fields.nickname = '';
@@ -328,9 +333,14 @@ async function freshPlan({access, configuration, targets, preparedPlan}) {
 
 export function buildEnvironmentInvitationWriteInput({configuration, preparedPlan}) {
   const f = configuration.history.fields, plan = preparedPlan.plan;
+  const statusReference = row => {
+    const matches = preparedPlan.classification.classifications.filter(entry => entry.accountKey === row.accountKey);
+    requireValue(matches.length === 1 && text(matches[0].statusId), 'INVITATION_WRITE_CLASSIFICATION_INVALID','write-prepare');
+    return matches[0].statusId;
+  };
   return {operation:'prepare', dataset:configuration.history.dataset, businessPlanSha256:preparedPlan.planSha256,
     plan:{creates:plan.creates.map(row => ({fields:Object.fromEntries(
-      ['creatorRecordId','state','externalUserId','nickname','observedAtMs'].map(role => [f[role],row[role]])),
+      ['creatorRecordId','state','externalUserId','nickname','observedAtMs'].map(role => [f[role],role === 'state' ? statusReference(row) : row[role]])),
       ...(row.avatar ? {image:{field:f.avatarHashes,...structuredClone(row.avatar)}} : {})})),
     updates:plan.updates.map(row => ({recordId:row.recordId,fields:{[f.observedAtMs]:row.observedAtMs}})),
     attachments:plan.attachExisting.map(row => ({recordId:row.recordId,field:f.avatarHashes,image:structuredClone(row.avatar)})),

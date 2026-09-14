@@ -142,7 +142,12 @@ configuration/environment arguments, `--targets`, `--prepared-plan` and a new
 `--output`. It validates the saved plan hash and rechecks the same reader,
 configuration, targets, taxonomy, history and original avatar bytes. Changed
 business effects stop preparation. The Provider binds logical fields, current
-baselines and images to the resulting `intentSha256`.
+baselines and images to the resulting `intentSha256`. History status references
+resolve through the current status master before comparison with business labels.
+Retained label inputs are accepted only when they identify exactly one master
+entry; unknown or ID/label-ambiguous values stop. Creates use the classified
+status ID in the logical status field, preserving reference identity independently
+of its display label.
 
 Review that intent together with the original `planSha256` and counts. After
 explicit authorization, `write-apply` requires those same inputs plus
