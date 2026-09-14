@@ -137,17 +137,47 @@ The CLI additionally checks private-file permissions and fixed input bytes.
 
 ## Selected write and reconciliation
 
-After reviewing an unblocked plan, call `prepareEnvironmentInvitationWrite`.
-It binds the existing business-plan hash to the selected generation, complete
-Provider baselines and original images. `applyEnvironmentInvitationWrite` only
-passes the returned intent to Runtime; Runtime supplies its trusted approval
-and durable evidence hooks. JSON booleans and hashes are not approval.
+After reviewing an unblocked plan, use `write-prepare` with the common pinned
+configuration/environment arguments, `--targets`, `--prepared-plan` and a new
+`--output`. It validates the saved plan hash and rechecks the same reader,
+configuration, targets, taxonomy, history and original avatar bytes. Changed
+business effects stop preparation. The Provider binds logical fields, current
+baselines and images to the resulting `intentSha256`.
 
-On any stopped or uncertain result, preserve owner-only evidence and call
-`reconcileEnvironmentInvitationWrite`. It returns `confirmed`, `missing`,
-`conflict`, or `unknown`. Do not resend an unknown create and do not resume an
-image checkpoint automatically. Re-read and prepare a residual plan for a new
-explicit approval.
+Review that intent together with the original `planSha256` and counts. After
+explicit authorization, `write-apply` requires those same inputs plus
+`--prepared-write`, `--expect-intent-sha256`, `--expect-plan-sha256`,
+`--confirm-create`, `--confirm-update`, `--confirm-attach`,
+`--confirm-already-applied`, and `--journal`. Attachment count includes
+new-row images and existing-row resumes. The journal must be a new file in a
+canonical absolute owner-only directory (mode 0700). The CLI persists and
+synchronizes each awaited event before execution proceeds. An existing journal
+stops apply, including after interruption. Flags bind an already authorized
+operation; they do not independently grant authority.
+
+Programmatic callers pass `{access,configuration,targets,preparedPlan}` to
+`prepareEnvironmentInvitationWrite`. Apply additionally requires the returned
+`preparedWrite` and `execution:{authorizeIntent,onEvent}`. These trusted
+functions are passed through Runtime's existing second invoke argument; no new
+host adapter is required. The callback must validate the exact reviewed intent
+and the event sink must durably preserve every event. Both CLI and API recheck
+the business plan before apply and require complete zero-write business
+replanning after Provider confirmation before reporting verified completion.
+
+On a stopped or uncertain result, retain the private plan, intent and journal.
+Run `write-reconcile` with the same pinned inputs, `--prepared-write` and
+`--journal`. The API takes the same parameters plus the saved `events` array.
+This is readback only and returns `confirmed`, `missing`, `conflict` or
+`unknown`; confirmed also requires the business readback. A truncated or
+unreadable journal stops recovery. Preserve it for inspection rather than
+inventing lost acknowledgement evidence.
+
+For example, if a new history row was created but its image attachment failed,
+retain its returned ID and reconcile. A newly reviewed residual plan may then
+contain only an existing-row image resume. Never delete the journal, replay
+an uncertain create, or fabricate returned IDs. Changed or residual effects
+require a new plan and the applicable explicit authorization. Synthetic tests
+prove local composition behavior only; live acceptance remains separate.
 
 ## Human review, failures and recovery
 
@@ -169,7 +199,6 @@ failure without replacing the original error.
 For changed selection, mapping, target identity or incomplete history, retain
 the failed artifact, correct the relevant owner's input and prepare a new target
 receipt/plan. Hashes detect changed inputs; they do not constitute approval.
-No mutation has occurred through this entry, so recovery requires no data
-rollback. Keep legacy receipts unchanged; do not pass this read-plan artifact
-to a legacy apply command. The remaining selected write connection and its
-concrete approval/readback procedure require separate implementation and review.
+Preparation and reconciliation do not mutate. After apply, preserve the durable
+journal and use the readback procedure above before considering another write.
+Keep legacy receipts unchanged; do not pass this plan to a legacy apply command.

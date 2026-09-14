@@ -13,8 +13,6 @@ export const INVITATION_SOURCE_INPUT_KIND = 'application/vnd.live-agency.creator
 // TODO: https://github.com/flair-agency/live-agency/issues/6
 // Runtime correlation binds this handoff to a selected instruction Provider;
 // it cannot establish current human/session/agency or source-row ownership.
-// TODO: reviewed write/readback (#14) remains a separate connection.
-// https://github.com/flair-agency/live-agency/issues/14
 const text = value => typeof value === 'string' && value.trim().length > 0;
 const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const canonical = value => Array.isArray(value) ? value.map(canonical) : object(value)
@@ -301,45 +299,104 @@ export async function prepareEnvironmentInvitationPlan({access, configuration, t
   const blocked = classification.blocked || hasBlockingRefreshIssues(plan);
   const result = {version:1, status:blocked ? 'blocked' : 'prepared', selection:s.selection,
     configurationFingerprint:s.configurationFingerprint, readIdentity:s.readIdentity,
-    targetReceiptSha256:receiptSha256, observations, classification, plan, reads:s.reads,
+    targetReceiptSha256:receiptSha256, observations, refinements, classification, plan,
+    knownExistingIds:history.map(row => row.recordId).sort(), reads:s.reads,
     businessWorkflowVerified:false};
   return {...result, planSha256:hash(result)};
 }
 
-// Selected writes remain separate from planning.  This adapter exposes only
-// logical rows: the Provider's private configuration resolves Lark resources,
-// columns, credentials and bounded operations.
-export async function prepareEnvironmentInvitationWrite({ access, preparedPlan }) {
-  requireValue(preparedPlan?.status === 'prepared' && preparedPlan?.plan && /^[0-9a-f]{64}$/.test(preparedPlan.planSha256),
-    'INVITATION_WRITE_PLAN_INVALID', 'write-prepare');
-  const plan = preparedPlan.plan;
-  requireValue(!hasBlockingRefreshIssues(plan), 'INVITATION_WRITE_BLOCKED', 'write-prepare');
-  const logical = { creates:structuredClone(plan.creates), updates:structuredClone(plan.updates), attachments:[
-    ...structuredClone(plan.attachExisting), ...structuredClone(plan.creates).filter(row => row.avatar).map(row => ({createFor:row.accountKey, avatar:row.avatar}))] };
-  const request = {requestId:randomUUID(), capability:DATASET_WRITE, version:'1.0.0', context:structuredClone(preparedPlan.selection),
-    input:{operation:'prepare',dataset:preparedPlan.configuration?.history?.dataset ?? 'history',businessPlanSha256:preparedPlan.planSha256,plan:logical}};
-  const reply = await access.invoke(request);
-  requireValue(same(access.selection, preparedPlan.selection) && same(reply?.selection, preparedPlan.selection), 'INVITATION_SELECTION_MISMATCH', 'write-prepare');
-  try { validateProviderResult(reply?.result, request); } catch (cause) { throw Object.assign(new TypeError('INVITATION_WRITE_PROTOCOL_INVALID',{cause}),{code:'INVITATION_WRITE_PROTOCOL_INVALID',stage:'write-prepare'}); }
-  if (reply.result.status === 'failed') throw Object.assign(new Error('INVITATION_WRITE_PREPARE_FAILED'), {code:'INVITATION_WRITE_PREPARE_FAILED',stage:'write-prepare',providerError:structuredClone(reply.result.error)});
-  requireValue(reply.result.status === 'done' && reply.result.output?.businessPlanSha256 === preparedPlan.planSha256 && /^[0-9a-f]{64}$/.test(reply.result.output?.intentSha256 ?? ''), 'INVITATION_WRITE_PREPARE_INVALID', 'write-prepare');
+
+function checkedPlan(access, configuration, preparedPlan) {
+  requireValue(object(preparedPlan), 'INVITATION_WRITE_PLAN_INVALID', 'write-prepare');
+  const {planSha256, sourceProvenance, ...body} = structuredClone(preparedPlan);
+  requireValue(planSha256 === hash(body) && body.status === 'prepared' && body.plan &&
+    !hasBlockingRefreshIssues(body.plan), 'INVITATION_WRITE_PLAN_INVALID', 'write-prepare');
+  readSession(access, configuration, body);
+  return body;
+}
+
+async function freshPlan({access, configuration, targets, preparedPlan}) {
+  checkedPlan(access, configuration, preparedPlan);
+  const current = await prepareEnvironmentInvitationPlan({access, configuration, targets,
+    observations:preparedPlan.observations, refinements:preparedPlan.refinements ?? []});
+  requireValue(current.targetReceiptSha256 === preparedPlan.targetReceiptSha256 &&
+    current.status === 'prepared' && same(current.plan, preparedPlan.plan) &&
+    same(current.classification, preparedPlan.classification) &&
+    same(current.knownExistingIds, preparedPlan.knownExistingIds) &&
+    same(current.readIdentity, preparedPlan.readIdentity), 'INVITATION_WRITE_PLAN_STALE', 'write-prepare');
+}
+
+export function buildEnvironmentInvitationWriteInput({configuration, preparedPlan}) {
+  const f = configuration.history.fields, plan = preparedPlan.plan;
+  return {operation:'prepare', dataset:configuration.history.dataset, businessPlanSha256:preparedPlan.planSha256,
+    plan:{creates:plan.creates.map(row => ({fields:Object.fromEntries(
+      ['creatorRecordId','state','externalUserId','nickname','observedAtMs'].map(role => [f[role],row[role]])),
+      ...(row.avatar ? {image:{field:f.avatarHashes,...structuredClone(row.avatar)}} : {})})),
+    updates:plan.updates.map(row => ({recordId:row.recordId,fields:{[f.observedAtMs]:row.observedAtMs}})),
+    attachments:plan.attachExisting.map(row => ({recordId:row.recordId,field:f.avatarHashes,image:structuredClone(row.avatar)})),
+    knownExistingIds:structuredClone(preparedPlan.knownExistingIds)}};
+}
+
+async function writeRequest(access, selection, input, stage, execution) {
+  requireValue(same(access.selection, selection), 'INVITATION_SELECTION_MISMATCH', stage);
+  const request = {requestId:randomUUID(),capability:DATASET_WRITE,version:'1.0.0',context:structuredClone(selection),input};
+  const reply = await access.invoke(request, execution);
+  requireValue(same(access.selection, selection) && same(reply?.selection, selection), 'INVITATION_SELECTION_MISMATCH', stage);
+  try { validateProviderResult(reply?.result,request); }
+  catch (cause) { throw Object.assign(new TypeError('INVITATION_WRITE_PROTOCOL_INVALID',{cause}),{code:'INVITATION_WRITE_PROTOCOL_INVALID',stage}); }
+  if (reply.result.status === 'failed') throw Object.assign(new Error('INVITATION_WRITE_FAILED'), {
+    code:'INVITATION_WRITE_FAILED',stage,providerError:structuredClone(reply.result.error)});
+  requireValue(reply.result.status === 'done', 'INVITATION_WRITE_UNCONFIRMED', stage);
   return structuredClone(reply.result.output);
 }
 
-export async function applyEnvironmentInvitationWrite({ access, preparedWrite }) {
-  requireValue(object(preparedWrite) && /^[0-9a-f]{64}$/.test(preparedWrite.intentSha256 ?? ''), 'INVITATION_WRITE_INTENT_INVALID', 'write-apply');
-  const request={requestId:randomUUID(),capability:DATASET_WRITE,version:'1.0.0',context:structuredClone(access.selection),input:{operation:'apply',prepared:structuredClone(preparedWrite)}};
-  const reply=await access.invoke(request);
-  try { validateProviderResult(reply?.result,request); } catch(cause) { throw Object.assign(new TypeError('INVITATION_WRITE_PROTOCOL_INVALID',{cause}),{code:'INVITATION_WRITE_PROTOCOL_INVALID',stage:'write-apply'}); }
-  if(reply.result.status==='failed') throw Object.assign(new Error('INVITATION_WRITE_APPLY_FAILED'),{code:'INVITATION_WRITE_APPLY_FAILED',stage:'write-apply',providerError:structuredClone(reply.result.error)});
-  requireValue(reply.result.output?.status==='confirmed','INVITATION_WRITE_UNCONFIRMED','write-apply'); return structuredClone(reply.result.output);
+export async function prepareEnvironmentInvitationWrite(args) {
+  await freshPlan(args);
+  const input = buildEnvironmentInvitationWriteInput(args);
+  const result = await writeRequest(args.access, args.preparedPlan.selection, input, 'write-prepare');
+  requireValue(result?.businessPlanSha256 === input.businessPlanSha256 &&
+    /^[0-9a-f]{64}$/.test(result.intentSha256 ?? '') && same(result.selection,args.preparedPlan.selection) &&
+    same(result.input,input), 'INVITATION_WRITE_PREPARE_INVALID', 'write-prepare');
+  return result;
 }
 
-export async function reconcileEnvironmentInvitationWrite({ access, preparedWrite }) {
-  requireValue(object(preparedWrite) && /^[0-9a-f]{64}$/.test(preparedWrite.intentSha256 ?? ''), 'INVITATION_WRITE_INTENT_INVALID', 'write-reconcile');
-  const request={requestId:randomUUID(),capability:DATASET_WRITE,version:'1.0.0',context:structuredClone(access.selection),input:{operation:'reconcile',prepared:structuredClone(preparedWrite)}};
-  const reply=await access.invoke(request);
-  try { validateProviderResult(reply?.result,request); } catch(cause) { throw Object.assign(new TypeError('INVITATION_WRITE_PROTOCOL_INVALID',{cause}),{code:'INVITATION_WRITE_PROTOCOL_INVALID',stage:'write-reconcile'}); }
-  if(reply.result.status==='failed') throw Object.assign(new Error('INVITATION_WRITE_RECONCILE_FAILED'),{code:'INVITATION_WRITE_RECONCILE_FAILED',stage:'write-reconcile',providerError:structuredClone(reply.result.error)});
-  requireValue(['confirmed','missing','conflict','unknown'].includes(reply.result.output?.status),'INVITATION_WRITE_RECONCILE_INVALID','write-reconcile'); return structuredClone(reply.result.output);
+function checkPreparedWrite(args) {
+  const {access,configuration,preparedPlan,preparedWrite} = args;
+  checkedPlan(access,configuration,preparedPlan);
+  requireValue(checkedReceipt(access,configuration,args.targets).receiptSha256 === preparedPlan.targetReceiptSha256,
+    'INVITATION_TARGET_RECEIPT_CHANGED','write');
+  requireValue(object(preparedWrite) && /^[0-9a-f]{64}$/.test(preparedWrite.intentSha256 ?? '') &&
+    same(preparedWrite.selection,preparedPlan.selection) &&
+    preparedWrite.businessPlanSha256 === preparedPlan.planSha256 &&
+    same(preparedWrite.input,buildEnvironmentInvitationWriteInput(args)), 'INVITATION_WRITE_INTENT_INVALID','write');
+}
+
+async function verifyBusinessResult(args, result) {
+  if (result.status !== 'confirmed') return result;
+  const current = await prepareEnvironmentInvitationPlan({access:args.access,configuration:args.configuration,targets:args.targets,
+    observations:args.preparedPlan.observations,refinements:args.preparedPlan.refinements ?? []});
+  requireValue(same(current.readIdentity,args.preparedPlan.readIdentity) && current.status === 'prepared' &&
+    !current.plan.creates.length && !current.plan.updates.length && !current.plan.attachExisting.length &&
+    current.plan.alreadyApplied.length === current.plan.rowCount, 'INVITATION_WRITE_READBACK_FAILED','write-readback');
+  return {...result,businessWorkflowVerified:true,readbackPlanSha256:current.planSha256};
+}
+
+export async function applyEnvironmentInvitationWrite(args) {
+  checkPreparedWrite(args);
+  requireValue(typeof args.execution?.authorizeIntent === 'function' && typeof args.execution?.onEvent === 'function',
+    'INVITATION_WRITE_EXECUTION_REQUIRED','write-apply');
+  await freshPlan(args);
+  const result = await writeRequest(args.access,args.preparedWrite.selection,
+    {operation:'apply',prepared:structuredClone(args.preparedWrite)},'write-apply',args.execution);
+  requireValue(result?.status === 'confirmed','INVITATION_WRITE_UNCONFIRMED','write-apply');
+  return verifyBusinessResult(args,result);
+}
+
+export async function reconcileEnvironmentInvitationWrite(args) {
+  checkPreparedWrite(args);
+  requireValue(Array.isArray(args.events),'INVITATION_WRITE_EVENTS_REQUIRED','write-reconcile');
+  const result = await writeRequest(args.access,args.preparedWrite.selection,
+    {operation:'reconcile',prepared:structuredClone(args.preparedWrite),events:structuredClone(args.events)},'write-reconcile');
+  requireValue(['confirmed','missing','conflict','unknown'].includes(result?.status),'INVITATION_WRITE_RECONCILE_INVALID','write-reconcile');
+  return verifyBusinessResult(args,result);
 }

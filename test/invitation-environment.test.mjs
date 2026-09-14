@@ -232,3 +232,96 @@ test('private correspondence JSON rejects duplicate members before parsing, incl
   assert.deepEqual(parseInvitationEnvironmentConfiguration('{"first":{"member":1},"second":{"member":2}}'),
     {first:{member:1},second:{member:2}});
 });
+
+test('selected write maps business roles, forwards execution hooks, and verifies complete business readback',async()=>{
+  const {prepareEnvironmentInvitationWrite,applyEnvironmentInvitationWrite,reconcileEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  const history=[], f=fixture({history}), receipt=await one(f), preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access), events=[];
+  f.access.invoke=async(request,execution)=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    let output;
+    if(request.input.operation==='prepare') {
+      assert.deepEqual(request.input.plan,{creates:[{fields:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time}}],updates:[],attachments:[],knownExistingIds:[]});
+      output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+    } else {
+      if(request.input.operation==='apply') {
+        assert.equal(await execution.authorizeIntent(request.input.prepared),true);
+        await execution.onEvent({stage:'create',recordIds:['new']});
+        history.push({recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}});
+      } else assert.deepEqual(request.input.events,events);
+      output={status:'confirmed'};
+    }
+    const {input,...identity}=request;
+    return {selection,result:{...identity,status:'done',output}};
+  };
+  const args={...f,targets:receipt,preparedPlan};
+  const preparedWrite=await prepareEnvironmentInvitationWrite(args);
+  const before=f.calls.length;
+  await assert.rejects(prepareEnvironmentInvitationWrite({...args,preparedPlan:{...preparedPlan,plan:{...preparedPlan.plan,creates:[]}}}),{code:'INVITATION_WRITE_PLAN_INVALID'});
+  assert.equal(f.calls.length,before);
+  await assert.rejects(applyEnvironmentInvitationWrite({...args,preparedWrite}),{code:'INVITATION_WRITE_EXECUTION_REQUIRED'});
+  const result=await applyEnvironmentInvitationWrite({...args,preparedWrite,execution:{authorizeIntent:async()=>true,onEvent:async e=>events.push(e)}});
+  assert.equal(result.businessWorkflowVerified,true);
+  assert.equal((await reconcileEnvironmentInvitationWrite({...args,preparedWrite,events})).businessWorkflowVerified,true);
+  history[0].values.name='drift';
+  await assert.rejects(reconcileEnvironmentInvitationWrite({...args,preparedWrite,events}),{code:'INVITATION_WRITE_READBACK_FAILED'});
+});
+
+test('logical write mapping preserves timestamp-only updates and both image paths',async()=>{
+  const {buildEnvironmentInvitationWriteInput}=await import('../src/invitation-environment.mjs');
+  const avatar={path:'/private/synthetic.png',size:9,sha256:'d'.repeat(64),name:'synthetic.png',mimeType:'image/png'};
+  const row={creatorRecordId:'p1',state:'eligible-example/one',externalUserId:'u1',nickname:'Name',observedAtMs:time,avatar};
+  const result=buildEnvironmentInvitationWriteInput({configuration,preparedPlan:{planSha256:'e'.repeat(64),knownExistingIds:['h1','h2'],plan:{creates:[row],updates:[{...row,recordId:'h1'}],attachExisting:[{...row,recordId:'h2'}]}}});
+  assert.deepEqual(result.plan.creates[0].image,{field:'images',...avatar});
+  assert.deepEqual(result.plan.updates,[{recordId:'h1',fields:{time}}]);
+  assert.deepEqual(result.plan.attachments,[{recordId:'h2',field:'images',image:avatar}]);
+  assert.deepEqual(result.plan.knownExistingIds,['h1','h2']);
+});
+
+test('write preparation rejects changed generation, reader identity and business history before write invocation',async()=>{
+  const {prepareEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  const f=fixture(), receipt=await one(f), preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const changed=fixture({intercept:r=>{r.result.output.configurationFingerprint='f'.repeat(64);}});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...changed,targets:receipt,preparedPlan}),{code:'INVITATION_READ_CONFIGURATION_CHANGED'});
+  assert.equal(changed.calls.some(r=>r.capability==='record-dataset-write/v1'),false);
+  const stale=fixture({history:[{recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}}]});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...stale,targets:receipt,preparedPlan}),{code:'INVITATION_WRITE_PLAN_STALE'});
+  const replacement=await targets({...f,mode:'selected',selectedAccounts:['one'],now:()=> '2026-09-14T00:00:00Z'});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...f,targets:replacement,preparedPlan}),{code:'INVITATION_WRITE_PLAN_STALE'});
+  f.access.selection.generation='e'.repeat(64);
+  await assert.rejects(prepareEnvironmentInvitationWrite({...f,targets:receipt,preparedPlan}),{code:'INVITATION_TARGET_RECEIPT_CHANGED'});
+});
+
+test('CLI write apply persists a private journal before mutation, refuses replay, and reconciles retained events',async t=>{
+  const {readFile,chmod,stat,realpath}=await import('node:fs/promises');
+  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'invitation-write-cli-')));await chmod(dir,0o700);t.after(()=>rm(dir,{recursive:true,force:true}));
+  const history=[],f=fixture({history}),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access);
+  let applied=0;
+  const journal=path.join(dir,'journal.ndjson');
+  f.access.invoke=async(request,execution)=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    let output;
+    if(request.input.operation==='prepare')output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+    else if(request.input.operation==='apply') {
+      assert.equal(await execution.authorizeIntent(request.input.prepared),true);
+      assert.match(await readFile(journal,'utf8'),/businessPlanSha256/);
+      await execution.onEvent({stage:'create',recordIds:['new']});
+      assert.match(await readFile(journal,'utf8'),/recordIds/);applied++;
+      history.push({recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}});output={status:'confirmed'};
+    } else {assert.deepEqual(request.input.events,[{stage:'create',recordIds:['new']}]);output={status:'confirmed'};}
+    const {input,...identity}=request;return {selection,result:{...identity,status:'done',output}};
+  };
+  const paths={configuration:path.join(dir,'config.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json'),'prepared-write':path.join(dir,'intent.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  const common=['--environment',path.join(dir,'env.json'),'--generation',selection.generation,'--configuration',paths.configuration,
+    '--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),'--targets',paths.targets,'--prepared-plan',paths['prepared-plan']];
+  const options={createAccess:async()=>f.access};
+  await run(parseArgs(['write-prepare',...common,'--output',paths['prepared-write']]),options);
+  const applyArgs=parseArgs(['write-apply',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'apply.json'),
+    '--expect-intent-sha256','c'.repeat(64),'--expect-plan-sha256',preparedPlan.planSha256,'--confirm-create','1','--confirm-update','0','--confirm-attach','0','--confirm-already-applied','0']);
+  assert.equal((await run(applyArgs,options)).businessWorkflowVerified,true);
+  assert.equal((await stat(journal)).mode&0o777,0o600);
+  await assert.rejects(run(applyArgs,options),{code:'EEXIST'});assert.equal(applied,1);
+  assert.equal((await run(parseArgs(['write-reconcile',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'reconcile.json')]),options)).businessWorkflowVerified,true);
+});
