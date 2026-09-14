@@ -6,6 +6,14 @@ Public helpers contain no service
 labels or source-screen rules. Authorized operators obtain the source meanings
 and observation procedure from the selected private Provider's packaged knowledge.
 
+The opt-in v3 input separates `status` from the Provider-retained raw `reason`.
+The classifier maps only `status` to an exact destination root. An unknown raw
+reason therefore remains observable without inventing a destination state;
+an unknown status still rejects classification. Provider-supplied abstract
+compliance signals may select a child only through an explicit reviewed
+`complianceRules` entry. The current selected-environment handoff remains v2
+until a separately reviewed Provider/Skill composition selects v3.
+
 ```mermaid
 flowchart TD
   Source[Normalized source facts] --> Classify[Skill classification]
