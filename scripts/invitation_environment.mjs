@@ -145,6 +145,10 @@ async function runWrite(args, context, configurationBytes) {
   const store = await invitationWriteClaimStore({environment:args.environment,dataset:context.configuration.history.dataset});
   if (args.operation === 'write-reconcile') {
     const recovery = await store.reconcile({intentSha256:preparedWrite.intentSha256,businessPlanSha256:preparedPlan.planSha256,journal:args.journal});
+    if (recovery.notStarted) {
+      await recovery.finish('missing');
+      return {status:'missing',reason:'WRITE_NOT_STARTED',intentSha256:preparedWrite.intentSha256,businessWorkflowVerified:false};
+    }
     const lines = (await readPrivateText(args.journal)).trim().split('\n');
     const entries = lines.map(line => JSON.parse(line));
     const header = entries.shift();
@@ -170,6 +174,7 @@ async function runWrite(args, context, configurationBytes) {
     await journal.sync();
     const directory = await open(path.dirname(args.journal),constants.O_RDONLY);
     try { await directory.sync(); } finally { await directory.close(); }
+    await claim.ready();
     const result = await applyEnvironmentInvitationWrite({...parameters,execution:{
       authorizeIntent:async actual => isDeepStrictEqual(actual,preparedWrite) &&
         await readPrivateText(args.configuration) === configurationBytes,
@@ -183,11 +188,11 @@ async function runWrite(args, context, configurationBytes) {
   } finally { await journal?.close(); }
 }
 
-export async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2), options = {}) {
   let args;
   try {
     args = parseArgs(argv);
-    const result = await run(args);
+    const result = await run(args, options);
     console.log(JSON.stringify({status:result.status ?? (args.operation === 'source' ? 'interaction-required' : 'prepared'), output:args.output,
       targetCount:result.manifest?.rowCount, planSha256:result.planSha256, intentSha256:result.intentSha256, businessWorkflowVerified:result.businessWorkflowVerified === true}));
     return ['blocked','missing','conflict','unknown'].includes(result.status) ? 2 : 0;

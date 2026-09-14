@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { prepareEnvironmentInvitationTargets as targets, prepareEnvironmentInvitationPlan as plan, prepareEnvironmentInvitationSource as source, prepareEnvironmentInvitationSourcePlan as sourcePlan } from '../src/invitation-environment.mjs';
 import { buildClassifiedInvitationRefreshPlanFromHistory } from '../src/invitation-classification.mjs';
-import { parseArgs, parseInvitationEnvironmentConfiguration, run } from '../scripts/invitation_environment.mjs';
+import { parseArgs, parseInvitationEnvironmentConfiguration, run, main } from '../scripts/invitation_environment.mjs';
 import { exportTargets } from '../scripts/invitation_lark_runtime.mjs';
 
 const selection = {environmentId:'test',environmentKind:'development',platformId:'synthetic',generation:'a'.repeat(64)};
@@ -267,6 +267,66 @@ test('selected write maps business roles, forwards execution hooks, and verifies
   await assert.rejects(reconcileEnvironmentInvitationWrite({...args,preparedWrite,events}),{code:'INVITATION_WRITE_READBACK_FAILED'});
 });
 
+test('failed selected write phases preserve request correlation and the safe Provider cause',async t=>{
+  const {buildEnvironmentInvitationWriteInput,prepareEnvironmentInvitationWrite,applyEnvironmentInvitationWrite,reconcileEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  for(const [operation,invoke] of Object.entries({prepare:prepareEnvironmentInvitationWrite,apply:applyEnvironmentInvitationWrite,reconcile:reconcileEnvironmentInvitationWrite})) {
+    await t.test(operation,async()=>{
+      const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+      const args={...f,targets:receipt,preparedPlan,events:[],execution:{authorizeIntent:async()=>true,onEvent:async()=>{}}};
+      args.preparedWrite={input:buildEnvironmentInvitationWriteInput(args),businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+      const original=f.access.invoke.bind(f.access);
+      const providerError={code:'SYNTHETIC_WRITE_STOPPED',message:'Synthetic safe Provider cause',details:{stage:operation}};
+      let requestId;
+      f.access.invoke=async request=>{
+        if(request.capability!=='record-dataset-write/v1')return original(request);
+        assert.equal(request.input.operation,operation);
+        requestId=request.requestId;
+        const {input,...identity}=request;
+        return {selection,result:{...identity,status:'failed',error:providerError}};
+      };
+      await assert.rejects(invoke(args),error=>{
+        assert.equal(error.code,'INVITATION_WRITE_FAILED');
+        assert.equal(error.stage,`write-${operation}`);
+        assert.match(requestId,/^[0-9a-f-]{36}$/);
+        assert.equal(error.requestId,requestId);
+        assert.equal(error.providerCode,providerError.code);
+        assert.deepEqual(error.providerError,providerError);
+        assert.notEqual(error.providerError,providerError);
+        return true;
+      });
+    });
+  }
+});
+
+test('CLI write failure emits only safe correlation fields and preserves private cause evidence',async t=>{
+  const {readFile,stat}=await import('node:fs/promises');
+  const dir=await mkdtemp(path.join(os.tmpdir(),'invitation-write-diagnostic-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access);
+  const providerError={code:'SYNTHETIC_WRITE_STOPPED',message:'Synthetic private diagnostic',details:{stage:'prepare'}};
+  let requestId;
+  f.access.invoke=async request=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    requestId=request.requestId;
+    const {input,...identity}=request;
+    return {selection,result:{...identity,status:'failed',error:providerError},serviceResponse:{synthetic:'not diagnostic evidence'}};
+  };
+  const paths={configuration:path.join(dir,'configuration.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  const output=path.join(dir,'diagnostic.json'),stderr=[];
+  t.mock.method(console,'error',line=>stderr.push(line));
+  t.mock.method(console,'log',()=>assert.fail('failed write must not report success'));
+  const exitCode=await main(['write-prepare','--environment',path.join(dir,'environment.json'),'--generation',selection.generation,
+    '--configuration',paths.configuration,'--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),
+    '--targets',paths.targets,'--prepared-plan',paths['prepared-plan'],'--output',output],{createAccess:async()=>f.access});
+  const diagnostic={status:'stopped',code:'INVITATION_WRITE_FAILED',stage:'write-prepare',requestId,providerCode:providerError.code,businessWorkflowVerified:false};
+  assert.equal(exitCode,2);
+  assert.match(requestId,/^[0-9a-f-]{36}$/);
+  assert.deepEqual(stderr.map(line=>JSON.parse(line)),[diagnostic]);
+  assert.deepEqual(JSON.parse(await readFile(output,'utf8')),{...diagnostic,providerError});
+  assert.equal((await stat(output)).mode&0o777,0o600);
+});
+
 test('logical write mapping preserves timestamp-only updates and both image paths',async()=>{
   const {buildEnvironmentInvitationWriteInput}=await import('../src/invitation-environment.mjs');
   const avatar={path:'/private/synthetic.png',size:9,sha256:'d'.repeat(64),name:'synthetic.png',mimeType:'image/png'};
@@ -333,6 +393,31 @@ test('CLI write apply persists a private journal before mutation, refuses replay
   assert.equal((await stat(journal)).mode&0o777,0o600);
   await assert.rejects(run({...applyArgs,journal:path.join(dir,'different.ndjson')},options),{code:'INVITATION_WRITE_INTENT_CONSUMED'});assert.equal(applied,1);
   assert.equal((await run(parseArgs(['write-reconcile',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'reconcile.json')]),options)).businessWorkflowVerified,true);
+});
+
+test('CLI reconciles a stopped initialization without a journal or Provider invocation',async t=>{
+  const {realpath,readFile}=await import('node:fs/promises');
+  const {invitationWriteClaimStore}=await import('../scripts/invitation_write_claim.mjs');
+  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'invitation-before-journal-')));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const environment=path.join(dir,'environment.json'),journal=path.join(dir,'absent.ndjson');
+  const paths={configuration:path.join(dir,'config.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json'),'prepared-write':path.join(dir,'intent.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan,'prepared-write':{intentSha256:'c'.repeat(64)}}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  await writeFile(environment,'{}',{mode:0o600});
+  const store=await invitationWriteClaimStore({environment,dataset:configuration.history.dataset});
+  const claimArgs={intentSha256:'c'.repeat(64),businessPlanSha256:preparedPlan.planSha256,journal};
+  const attempt=await store.acquire(claimArgs);await attempt.stopped();
+  const before=f.calls.length;
+  const result=await run(parseArgs(['write-reconcile','--environment',environment,'--generation',selection.generation,
+    '--configuration',paths.configuration,'--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),
+    '--targets',paths.targets,'--prepared-plan',paths['prepared-plan'],'--prepared-write',paths['prepared-write'],'--journal',journal,
+    '--output',path.join(dir,'reconcile.json')]),{createAccess:async()=>f.access});
+  assert.deepEqual(result,{status:'missing',reason:'WRITE_NOT_STARTED',intentSha256:claimArgs.intentSha256,businessWorkflowVerified:false});
+  assert.equal(f.calls.length,before);
+  await assert.rejects(readFile(journal),{code:'ENOENT'});
+  await assert.rejects(store.acquire(claimArgs),{code:'INVITATION_WRITE_INTENT_CONSUMED'});
+  const next=await store.acquire({...claimArgs,intentSha256:'d'.repeat(64)});await next.ready();await next.complete();
 });
 
 test('history status references resolve through the current master; unknown and ambiguous values stop',async()=>{

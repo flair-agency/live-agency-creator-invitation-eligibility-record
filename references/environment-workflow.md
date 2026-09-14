@@ -169,14 +169,22 @@ while an attempt is active. The lock is acquired before business preflight.
 Successful verified execution releases the active lock but retains its claim.
 
 A failed attempt retains its claim, journal and stopped lock. A killed process
-may leave a running lock. Reconciliation refuses a running attempt while its
+may leave an initializing or running lock. The complete durable claim is
+published before its active lock; partial file writes are not published as locks.
+Only after the journal header is durable does the CLI mark the attempt running,
+before invoking the write operation. Matching reconciliation of a stopped or
+dead-process initialization returns `missing` with `WRITE_NOT_STARTED` and
+releases its active lock without requiring a journal that was not yet created.
+The intent remains consumed; any new attempt needs a new reviewed intent.
+Once marked running, the normal journal and readback requirements apply.
+Reconciliation refuses an initializing or running attempt while its
 PID is alive; uncertain PID reuse conservatively stops recovery. Only explicit
 reconciliation of the matching claimed intent and journal can release a stopped
 or dead-process lock after `confirmed` or `missing`. `unknown`, `conflict`,
 unreadable evidence and mismatched ownership retain the lock. Do not delete
 claims or locks to force replay. A new residual plan needs a new intent and
 applicable approval after reconciliation releases the dataset. These files
-require the selected local filesystem's exclusive creation and synchronization
+require the selected local filesystem's exclusive hard-link publication and synchronization
 semantics; no cross-host or shared-filesystem guarantee is claimed.
 
 The diagnostic codes `INVITATION_WRITE_DATASET_LOCKED` and

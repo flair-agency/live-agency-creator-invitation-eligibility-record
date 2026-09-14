@@ -355,7 +355,8 @@ async function writeRequest(access, selection, input, stage, execution) {
   try { validateProviderResult(reply?.result,request); }
   catch (cause) { throw Object.assign(new TypeError('INVITATION_WRITE_PROTOCOL_INVALID',{cause}),{code:'INVITATION_WRITE_PROTOCOL_INVALID',stage}); }
   if (reply.result.status === 'failed') throw Object.assign(new Error('INVITATION_WRITE_FAILED'), {
-    code:'INVITATION_WRITE_FAILED',stage,providerError:structuredClone(reply.result.error)});
+    code:'INVITATION_WRITE_FAILED',stage,requestId:request.requestId,providerCode:reply.result.error.code,
+    providerError:structuredClone(reply.result.error)});
   requireValue(reply.result.status === 'done', 'INVITATION_WRITE_UNCONFIRMED', stage);
   return structuredClone(reply.result.output);
 }
