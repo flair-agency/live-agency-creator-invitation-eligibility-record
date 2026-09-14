@@ -20,8 +20,9 @@ The Provider supplies the observed parent eligibility and invitation category;
 this Skill chooses a configured child only from that category or explicit
 reviewed refinement evidence. The classification helper is pure planning;
 `scripts/invitation_environment.mjs` connects selected-environment reads to that
-same planning core. It provides `targets`, `source`, `source-plan` and the raw
-normalized-input `plan`, with no write command.
+same planning core. It provides `targets`, `source`, `source-plan`, the raw
+normalized-input `plan`, and explicit `write-prepare`, `write-apply` and
+`write-reconcile` commands.
 Existing v1 routes remain compatible but cannot
 preserve category and are insufficient for category-preserving migration acceptance.
 For supplied normalized history, the reference also documents the pure

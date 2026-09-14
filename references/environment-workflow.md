@@ -7,9 +7,10 @@ configuration. No service SDK, credential store or service field representation
 is used by this entry. The existing legacy client route is retained separately.
 
 This is a development implementation, not a distributed or accepted production
-workflow. It does not acquire source observations, invoke a write capability,
-install packages or register a Skill. A prepared plan is not registration
-authority and always has `businessWorkflowVerified: false`.
+workflow. A prepared plan is not registration authority and always has
+`businessWorkflowVerified: false`. The selected write adapter uses
+`record-dataset-write/v1`; it never supplies service IDs, credentials or an
+approval flag.
 
 ## Inputs and their owners
 
@@ -134,6 +135,92 @@ The raw normalized-observation route retains its narrower assurance; only the
 source route records Runtime instruction correlation.
 The CLI additionally checks private-file permissions and fixed input bytes.
 
+## Selected write and reconciliation
+
+After reviewing an unblocked plan, use `write-prepare` with the common pinned
+configuration/environment arguments, `--targets`, `--prepared-plan` and a new
+`--output`. It validates the saved plan hash and rechecks the same reader,
+configuration, targets, taxonomy, history and original avatar bytes. Changed
+business effects stop preparation. The Provider binds logical fields, current
+baselines and images to the resulting `intentSha256`. History status references
+resolve through the current status master before comparison with business labels.
+Retained label inputs are accepted only when they identify exactly one master
+entry; unknown or ID/label-ambiguous values stop. Creates use the classified
+status ID in the logical status field, preserving reference identity independently
+of its display label.
+
+Review that intent together with the original `planSha256` and counts. After
+explicit authorization, `write-apply` requires those same inputs plus
+`--prepared-write`, `--expect-intent-sha256`, `--expect-plan-sha256`,
+`--confirm-create`, `--confirm-update`, `--confirm-attach`,
+`--confirm-already-applied`, and `--journal`. Attachment count includes
+new-row images and existing-row resumes. The journal must be a new file in a
+canonical absolute owner-only directory (mode 0700). The CLI persists and
+synchronizes each awaited event before execution proceeds. An existing journal
+stops apply, including after interruption. Flags bind an already authorized
+operation; they do not independently grant authority.
+
+The canonical selected environment file's parent directory must also be
+owner-only (mode 0700). Its fixed `.invitation-write-state` directory stores
+an exclusive lock per environment/dataset and a permanent claim per intent.
+They are independent of `--journal`: another journal cannot replay a claimed
+intent, and another process or newly approved plan cannot enter the dataset
+while an attempt is active. The lock is acquired before business preflight.
+Successful verified execution releases the active lock but retains its claim.
+
+A failed attempt retains its claim, journal and stopped lock. A killed process
+may leave an initializing or running lock. The complete durable claim is
+published before its active lock; partial file writes are not published as locks.
+Only after the journal header is durable does the CLI mark the attempt running,
+before invoking the write operation. Matching reconciliation of a stopped or
+dead-process initialization returns `missing` with `WRITE_NOT_STARTED` and
+releases its active lock without requiring a journal that was not yet created.
+The intent remains consumed; any new attempt needs a new reviewed intent.
+Once marked running, the normal journal and readback requirements apply.
+Reconciliation refuses an initializing or running attempt while its
+PID is alive; uncertain PID reuse conservatively stops recovery. Only explicit
+reconciliation of the matching claimed intent and journal can release a stopped
+or dead-process lock after `confirmed` or `missing`. `unknown`, `conflict`,
+unreadable evidence and mismatched ownership retain the lock. Do not delete
+claims or locks to force replay. A new residual plan needs a new intent and
+applicable approval after reconciliation releases the dataset. These files
+require the selected local filesystem's exclusive hard-link publication and synchronization
+semantics; no cross-host or shared-filesystem guarantee is claimed.
+
+The diagnostic codes `INVITATION_WRITE_DATASET_LOCKED` and
+`INVITATION_WRITE_INTENT_CONSUMED` identify exclusion and replay refusal.
+`claimEvidenceCode` reports an additional failure to preserve stopped-lock
+state. Preserve all evidence and inspect the selected store when that occurs;
+its existing running lock continues to block another attempt. Lock release uses
+an exclusive release guard so concurrent reconcilers cannot unlink a later
+attempt's lock. An abandoned release guard blocks automatic release; preserve
+it with the claim and journal for owner inspection rather than deleting it to
+force continuation.
+
+Programmatic callers pass `{access,configuration,targets,preparedPlan}` to
+`prepareEnvironmentInvitationWrite`. Apply additionally requires the returned
+`preparedWrite` and `execution:{authorizeIntent,onEvent}`. These trusted
+functions are passed through Runtime's existing second invoke argument; no new
+host adapter is required. The callback must validate the exact reviewed intent
+and the event sink must durably preserve every event. Both CLI and API recheck
+the business plan before apply and require complete zero-write business
+replanning after Provider confirmation before reporting verified completion.
+
+On a stopped or uncertain result, retain the private plan, intent and journal.
+Run `write-reconcile` with the same pinned inputs, `--prepared-write` and
+`--journal`. The API takes the same parameters plus the saved `events` array.
+This is readback only and returns `confirmed`, `missing`, `conflict` or
+`unknown`; confirmed also requires the business readback. A truncated or
+unreadable journal stops recovery. Preserve it for inspection rather than
+inventing lost acknowledgement evidence.
+
+For example, if a new history row was created but its image attachment failed,
+retain its returned ID and reconcile. A newly reviewed residual plan may then
+contain only an existing-row image resume. Never delete the journal, replay
+an uncertain create, or fabricate returned IDs. Changed or residual effects
+require a new plan and the applicable explicit authorization. Synthetic tests
+prove local composition behavior only; live acceptance remains separate.
+
 ## Human review, failures and recovery
 
 A human can trace each creator from the target receipt's `manifest.rows` to the
@@ -154,7 +241,6 @@ failure without replacing the original error.
 For changed selection, mapping, target identity or incomplete history, retain
 the failed artifact, correct the relevant owner's input and prepare a new target
 receipt/plan. Hashes detect changed inputs; they do not constitute approval.
-No mutation has occurred through this entry, so recovery requires no data
-rollback. Keep legacy receipts unchanged; do not pass this read-plan artifact
-to a legacy apply command. The remaining selected write connection and its
-concrete approval/readback procedure require separate implementation and review.
+Preparation and reconciliation do not mutate. After apply, preserve the durable
+journal and use the readback procedure above before considering another write.
+Keep legacy receipts unchanged; do not pass this plan to a legacy apply command.

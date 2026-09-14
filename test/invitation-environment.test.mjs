@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { prepareEnvironmentInvitationTargets as targets, prepareEnvironmentInvitationPlan as plan, prepareEnvironmentInvitationSource as source, prepareEnvironmentInvitationSourcePlan as sourcePlan } from '../src/invitation-environment.mjs';
 import { buildClassifiedInvitationRefreshPlanFromHistory } from '../src/invitation-classification.mjs';
-import { parseArgs, parseInvitationEnvironmentConfiguration, run } from '../scripts/invitation_environment.mjs';
+import { parseArgs, parseInvitationEnvironmentConfiguration, run, main } from '../scripts/invitation_environment.mjs';
 import { exportTargets } from '../scripts/invitation_lark_runtime.mjs';
 
 const selection = {environmentId:'test',environmentKind:'development',platformId:'synthetic',generation:'a'.repeat(64)};
@@ -172,7 +172,7 @@ test('out-of-scope references stop, invalid stored history remains blocked, imag
   const row={recordId:'h1',values:{person:'other',status:'x',uid:'',name:'',time,images:[]}};
   let f=fixture({history:[row]});
   await assert.rejects(plan({...f,targets:await one(f),observations:observations()}),{code:'INVITATION_HISTORY_SCOPE_INVALID'});
-  row.values.person='p1'; row.values.time='invalid'; f=fixture({history:[row]});
+  row.values.person='p1'; row.values.status='eligible-example/one'; row.values.time='invalid'; f=fixture({history:[row]});
   const result=await plan({...f,targets:await one(f),observations:observations()});
   assert.equal(result.status,'blocked'); assert.equal(result.plan.invalidStored.length,1);
   row.values.time=time; row.values.images=null; f=fixture({history:[row]});
@@ -231,4 +231,206 @@ test('private correspondence JSON rejects duplicate members before parsing, incl
     {code:'INVITATION_CONFIGURATION_DUPLICATE_MEMBER'});
   assert.deepEqual(parseInvitationEnvironmentConfiguration('{"first":{"member":1},"second":{"member":2}}'),
     {first:{member:1},second:{member:2}});
+});
+
+test('selected write maps business roles, forwards execution hooks, and verifies complete business readback',async()=>{
+  const {prepareEnvironmentInvitationWrite,applyEnvironmentInvitationWrite,reconcileEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  const history=[], f=fixture({history}), receipt=await one(f), preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access), events=[];
+  f.access.invoke=async(request,execution)=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    let output;
+    if(request.input.operation==='prepare') {
+      assert.deepEqual(request.input.plan,{creates:[{fields:{person:'p1',status:'child',uid:'u1',name:'Name',time}}],updates:[],attachments:[],knownExistingIds:[]});
+      output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+    } else {
+      if(request.input.operation==='apply') {
+        assert.equal(await execution.authorizeIntent(request.input.prepared),true);
+        await execution.onEvent({stage:'create',recordIds:['new']});
+        history.push({recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}});
+      } else assert.deepEqual(request.input.events,events);
+      output={status:'confirmed'};
+    }
+    const {input,...identity}=request;
+    return {selection,result:{...identity,status:'done',output}};
+  };
+  const args={...f,targets:receipt,preparedPlan};
+  const preparedWrite=await prepareEnvironmentInvitationWrite(args);
+  const before=f.calls.length;
+  await assert.rejects(prepareEnvironmentInvitationWrite({...args,preparedPlan:{...preparedPlan,plan:{...preparedPlan.plan,creates:[]}}}),{code:'INVITATION_WRITE_PLAN_INVALID'});
+  assert.equal(f.calls.length,before);
+  await assert.rejects(applyEnvironmentInvitationWrite({...args,preparedWrite}),{code:'INVITATION_WRITE_EXECUTION_REQUIRED'});
+  const result=await applyEnvironmentInvitationWrite({...args,preparedWrite,execution:{authorizeIntent:async()=>true,onEvent:async e=>events.push(e)}});
+  assert.equal(result.businessWorkflowVerified,true);
+  assert.equal((await reconcileEnvironmentInvitationWrite({...args,preparedWrite,events})).businessWorkflowVerified,true);
+  history[0].values.name='drift';
+  await assert.rejects(reconcileEnvironmentInvitationWrite({...args,preparedWrite,events}),{code:'INVITATION_WRITE_READBACK_FAILED'});
+});
+
+test('failed selected write phases preserve request correlation and the safe Provider cause',async t=>{
+  const {buildEnvironmentInvitationWriteInput,prepareEnvironmentInvitationWrite,applyEnvironmentInvitationWrite,reconcileEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  for(const [operation,invoke] of Object.entries({prepare:prepareEnvironmentInvitationWrite,apply:applyEnvironmentInvitationWrite,reconcile:reconcileEnvironmentInvitationWrite})) {
+    await t.test(operation,async()=>{
+      const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+      const args={...f,targets:receipt,preparedPlan,events:[],execution:{authorizeIntent:async()=>true,onEvent:async()=>{}}};
+      args.preparedWrite={input:buildEnvironmentInvitationWriteInput(args),businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+      const original=f.access.invoke.bind(f.access);
+      const providerError={code:'SYNTHETIC_WRITE_STOPPED',message:'Synthetic safe Provider cause',details:{stage:operation}};
+      let requestId;
+      f.access.invoke=async request=>{
+        if(request.capability!=='record-dataset-write/v1')return original(request);
+        assert.equal(request.input.operation,operation);
+        requestId=request.requestId;
+        const {input,...identity}=request;
+        return {selection,result:{...identity,status:'failed',error:providerError}};
+      };
+      await assert.rejects(invoke(args),error=>{
+        assert.equal(error.code,'INVITATION_WRITE_FAILED');
+        assert.equal(error.stage,`write-${operation}`);
+        assert.match(requestId,/^[0-9a-f-]{36}$/);
+        assert.equal(error.requestId,requestId);
+        assert.equal(error.providerCode,providerError.code);
+        assert.deepEqual(error.providerError,providerError);
+        assert.notEqual(error.providerError,providerError);
+        return true;
+      });
+    });
+  }
+});
+
+test('CLI write failure emits only safe correlation fields and preserves private cause evidence',async t=>{
+  const {readFile,stat}=await import('node:fs/promises');
+  const dir=await mkdtemp(path.join(os.tmpdir(),'invitation-write-diagnostic-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access);
+  const providerError={code:'SYNTHETIC_WRITE_STOPPED',message:'Synthetic private diagnostic',details:{stage:'prepare'}};
+  let requestId;
+  f.access.invoke=async request=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    requestId=request.requestId;
+    const {input,...identity}=request;
+    return {selection,result:{...identity,status:'failed',error:providerError},serviceResponse:{synthetic:'not diagnostic evidence'}};
+  };
+  const paths={configuration:path.join(dir,'configuration.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  const output=path.join(dir,'diagnostic.json'),stderr=[];
+  t.mock.method(console,'error',line=>stderr.push(line));
+  t.mock.method(console,'log',()=>assert.fail('failed write must not report success'));
+  const exitCode=await main(['write-prepare','--environment',path.join(dir,'environment.json'),'--generation',selection.generation,
+    '--configuration',paths.configuration,'--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),
+    '--targets',paths.targets,'--prepared-plan',paths['prepared-plan'],'--output',output],{createAccess:async()=>f.access});
+  const diagnostic={status:'stopped',code:'INVITATION_WRITE_FAILED',stage:'write-prepare',requestId,providerCode:providerError.code,businessWorkflowVerified:false};
+  assert.equal(exitCode,2);
+  assert.match(requestId,/^[0-9a-f-]{36}$/);
+  assert.deepEqual(stderr.map(line=>JSON.parse(line)),[diagnostic]);
+  assert.deepEqual(JSON.parse(await readFile(output,'utf8')),{...diagnostic,providerError});
+  assert.equal((await stat(output)).mode&0o777,0o600);
+});
+
+test('logical write mapping preserves timestamp-only updates and both image paths',async()=>{
+  const {buildEnvironmentInvitationWriteInput}=await import('../src/invitation-environment.mjs');
+  const avatar={path:'/private/synthetic.png',size:9,sha256:'d'.repeat(64),name:'synthetic.png',mimeType:'image/png'};
+  const row={accountKey:'one',creatorRecordId:'p1',state:'eligible-example/one',externalUserId:'u1',nickname:'Name',observedAtMs:time,avatar};
+  const result=buildEnvironmentInvitationWriteInput({configuration,preparedPlan:{classification:{classifications:[{accountKey:'one',statusId:'child'}]},planSha256:'e'.repeat(64),knownExistingIds:['h1','h2'],plan:{creates:[row],updates:[{...row,recordId:'h1'}],attachExisting:[{...row,recordId:'h2'}]}}});
+  assert.equal(result.plan.creates[0].fields.status,'child');
+  assert.deepEqual(result.plan.creates[0].image,{field:'images',...avatar});
+  assert.deepEqual(result.plan.updates,[{recordId:'h1',fields:{time}}]);
+  assert.deepEqual(result.plan.attachments,[{recordId:'h2',field:'images',image:avatar}]);
+  assert.deepEqual(result.plan.knownExistingIds,['h1','h2']);
+});
+
+test('write preparation rejects changed generation, reader identity and business history before write invocation',async()=>{
+  const {prepareEnvironmentInvitationWrite}=await import('../src/invitation-environment.mjs');
+  const f=fixture(), receipt=await one(f), preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const changed=fixture({intercept:r=>{r.result.output.configurationFingerprint='f'.repeat(64);}});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...changed,targets:receipt,preparedPlan}),{code:'INVITATION_READ_CONFIGURATION_CHANGED'});
+  assert.equal(changed.calls.some(r=>r.capability==='record-dataset-write/v1'),false);
+  const stale=fixture({history:[{recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}}]});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...stale,targets:receipt,preparedPlan}),{code:'INVITATION_WRITE_PLAN_STALE'});
+  const replacement=await targets({...f,mode:'selected',selectedAccounts:['one'],now:()=> '2026-09-14T00:00:00Z'});
+  await assert.rejects(prepareEnvironmentInvitationWrite({...f,targets:replacement,preparedPlan}),{code:'INVITATION_WRITE_PLAN_STALE'});
+  f.access.selection.generation='e'.repeat(64);
+  await assert.rejects(prepareEnvironmentInvitationWrite({...f,targets:receipt,preparedPlan}),{code:'INVITATION_TARGET_RECEIPT_CHANGED'});
+});
+
+test('CLI write apply persists a private journal before mutation, refuses replay, and reconciles retained events',async t=>{
+  const {readFile,chmod,stat,realpath}=await import('node:fs/promises');
+  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'invitation-write-cli-')));await chmod(dir,0o700);t.after(()=>rm(dir,{recursive:true,force:true}));
+  const history=[],f=fixture({history}),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const original=f.access.invoke.bind(f.access);
+  let applied=0, releaseAttempt, enteredAttempt;
+  const held = new Promise(resolve=>{releaseAttempt=resolve;});
+  const entered = new Promise(resolve=>{enteredAttempt=resolve;});
+  const journal=path.join(dir,'journal.ndjson');
+  f.access.invoke=async(request,execution)=>{
+    if(request.capability!=='record-dataset-write/v1')return original(request);
+    let output;
+    if(request.input.operation==='prepare')output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
+    else if(request.input.operation==='apply') {
+      assert.equal(await execution.authorizeIntent(request.input.prepared),true);
+      enteredAttempt(); await held;
+      assert.match(await readFile(journal,'utf8'),/businessPlanSha256/);
+      await execution.onEvent({stage:'create',recordIds:['new']});
+      assert.match(await readFile(journal,'utf8'),/recordIds/);applied++;
+      history.push({recordId:'new',values:{person:'p1',status:'eligible-example/one',uid:'u1',name:'Name',time,images:[]}});output={status:'confirmed'};
+    } else {assert.deepEqual(request.input.events,[{stage:'create',recordIds:['new']}]);output={status:'confirmed'};}
+    const {input,...identity}=request;return {selection,result:{...identity,status:'done',output}};
+  };
+  const paths={configuration:path.join(dir,'config.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json'),'prepared-write':path.join(dir,'intent.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  await writeFile(path.join(dir,'env.json'),'{}',{mode:0o600});
+  const common=['--environment',path.join(dir,'env.json'),'--generation',selection.generation,'--configuration',paths.configuration,
+    '--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),'--targets',paths.targets,'--prepared-plan',paths['prepared-plan']];
+  const options={createAccess:async()=>f.access};
+  await run(parseArgs(['write-prepare',...common,'--output',paths['prepared-write']]),options);
+  const applyArgs=parseArgs(['write-apply',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'apply.json'),
+    '--expect-intent-sha256','c'.repeat(64),'--expect-plan-sha256',preparedPlan.planSha256,'--confirm-create','1','--confirm-update','0','--confirm-attach','0','--confirm-already-applied','0']);
+  const firstAttempt = run(applyArgs,options);
+  await entered;
+  await assert.rejects(run({...applyArgs,journal:path.join(dir,'concurrent.ndjson')},options),{code:'INVITATION_WRITE_DATASET_LOCKED'});
+  releaseAttempt();
+  assert.equal((await firstAttempt).businessWorkflowVerified,true);
+  assert.equal((await stat(journal)).mode&0o777,0o600);
+  await assert.rejects(run({...applyArgs,journal:path.join(dir,'different.ndjson')},options),{code:'INVITATION_WRITE_INTENT_CONSUMED'});assert.equal(applied,1);
+  assert.equal((await run(parseArgs(['write-reconcile',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'reconcile.json')]),options)).businessWorkflowVerified,true);
+});
+
+test('CLI reconciles a stopped initialization without a journal or Provider invocation',async t=>{
+  const {realpath,readFile}=await import('node:fs/promises');
+  const {invitationWriteClaimStore}=await import('../scripts/invitation_write_claim.mjs');
+  const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'invitation-before-journal-')));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const f=fixture(),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
+  const environment=path.join(dir,'environment.json'),journal=path.join(dir,'absent.ndjson');
+  const paths={configuration:path.join(dir,'config.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json'),'prepared-write':path.join(dir,'intent.json')};
+  for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan,'prepared-write':{intentSha256:'c'.repeat(64)}}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  await writeFile(environment,'{}',{mode:0o600});
+  const store=await invitationWriteClaimStore({environment,dataset:configuration.history.dataset});
+  const claimArgs={intentSha256:'c'.repeat(64),businessPlanSha256:preparedPlan.planSha256,journal};
+  const attempt=await store.acquire(claimArgs);await attempt.stopped();
+  const before=f.calls.length;
+  const result=await run(parseArgs(['write-reconcile','--environment',environment,'--generation',selection.generation,
+    '--configuration',paths.configuration,'--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),
+    '--targets',paths.targets,'--prepared-plan',paths['prepared-plan'],'--prepared-write',paths['prepared-write'],'--journal',journal,
+    '--output',path.join(dir,'reconcile.json')]),{createAccess:async()=>f.access});
+  assert.deepEqual(result,{status:'missing',reason:'WRITE_NOT_STARTED',intentSha256:claimArgs.intentSha256,businessWorkflowVerified:false});
+  assert.equal(f.calls.length,before);
+  await assert.rejects(readFile(journal),{code:'ENOENT'});
+  await assert.rejects(store.acquire(claimArgs),{code:'INVITATION_WRITE_INTENT_CONSUMED'});
+  const next=await store.acquire({...claimArgs,intentSha256:'d'.repeat(64)});await next.ready();await next.complete();
+});
+
+test('history status references resolve through the current master; unknown and ambiguous values stop',async()=>{
+  const historic={recordId:'h1',values:{person:'p1',status:'child',uid:'u1',name:'Name',time:time-1000,images:[]}};
+  const f=fixture({history:[historic]}),receipt=await one(f);
+  const prepared=await plan({...f,targets:receipt,observations:observations()});
+  assert.equal(prepared.plan.updates.length,1);
+  assert.equal(prepared.plan.updates[0].state,'eligible-example/one');
+  historic.values.status='unknown-id';
+  await assert.rejects(plan({...f,targets:receipt,observations:observations()}),{code:'INVITATION_HISTORY_STATE_UNRESOLVED'});
+  historic.values.status='child';
+  const ambiguous=fixture({history:[historic],intercept:(reply,request)=>{
+    if(request.input.dataset==='taxonomy')reply.result.output.rows[0].values.title='child';
+  }});
+  await assert.rejects(plan({...ambiguous,targets:await one(ambiguous),observations:observations(['one'],{eligibility:'child'})}),{code:'INVITATION_HISTORY_STATE_UNRESOLVED'});
 });
