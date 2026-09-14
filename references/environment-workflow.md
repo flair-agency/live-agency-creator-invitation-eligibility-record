@@ -7,9 +7,10 @@ configuration. No service SDK, credential store or service field representation
 is used by this entry. The existing legacy client route is retained separately.
 
 This is a development implementation, not a distributed or accepted production
-workflow. It does not acquire source observations, invoke a write capability,
-install packages or register a Skill. A prepared plan is not registration
-authority and always has `businessWorkflowVerified: false`.
+workflow. A prepared plan is not registration authority and always has
+`businessWorkflowVerified: false`. The selected write adapter uses
+`record-dataset-write/v1`; it never supplies service IDs, credentials or an
+approval flag.
 
 ## Inputs and their owners
 
@@ -133,6 +134,20 @@ and `prepareEnvironmentInvitationPlan` from the package's `./environment` export
 The raw normalized-observation route retains its narrower assurance; only the
 source route records Runtime instruction correlation.
 The CLI additionally checks private-file permissions and fixed input bytes.
+
+## Selected write and reconciliation
+
+After reviewing an unblocked plan, call `prepareEnvironmentInvitationWrite`.
+It binds the existing business-plan hash to the selected generation, complete
+Provider baselines and original images. `applyEnvironmentInvitationWrite` only
+passes the returned intent to Runtime; Runtime supplies its trusted approval
+and durable evidence hooks. JSON booleans and hashes are not approval.
+
+On any stopped or uncertain result, preserve owner-only evidence and call
+`reconcileEnvironmentInvitationWrite`. It returns `confirmed`, `missing`,
+`conflict`, or `unknown`. Do not resend an unknown create and do not resume an
+image checkpoint automatically. Re-read and prepare a residual plan for a new
+explicit approval.
 
 ## Human review, failures and recovery
 
