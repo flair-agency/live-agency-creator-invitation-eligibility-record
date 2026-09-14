@@ -2,6 +2,7 @@
 import path from 'node:path';
 import {open, constants, lstat, realpath} from 'node:fs/promises';
 import {isDeepStrictEqual} from 'node:util';
+import {invitationWriteClaimStore} from './invitation_write_claim.mjs';
 import { createHash } from 'node:crypto';
 import { isMainModule } from '@flair-agency/cli-utils/is-main';
 import { readPrivateJson, readPrivateText, writePrivateJson } from '@flair-agency/private-files';
@@ -141,34 +142,45 @@ async function runWrite(args, context, configurationBytes) {
   if (args.operation === 'write-prepare') return prepareEnvironmentInvitationWrite(parameters);
   const preparedWrite = await readPrivateJson(args['prepared-write']);
   parameters.preparedWrite = preparedWrite;
+  const store = await invitationWriteClaimStore({environment:args.environment,dataset:context.configuration.history.dataset});
   if (args.operation === 'write-reconcile') {
+    const recovery = await store.reconcile({intentSha256:preparedWrite.intentSha256,businessPlanSha256:preparedPlan.planSha256,journal:args.journal});
     const lines = (await readPrivateText(args.journal)).trim().split('\n');
     const entries = lines.map(line => JSON.parse(line));
     const header = entries.shift();
     if (header?.intentSha256 !== preparedWrite.intentSha256 || header?.businessPlanSha256 !== preparedPlan.planSha256) throw new TypeError('journal intent mismatch');
-    return reconcileEnvironmentInvitationWrite({...parameters,events:entries});
+    const result = await reconcileEnvironmentInvitationWrite({...parameters,events:entries});
+    await recovery.finish(result.status);
+    return result;
   }
   const p = preparedPlan.plan;
   if (args['expect-intent-sha256'] !== preparedWrite.intentSha256 || args['expect-plan-sha256'] !== preparedPlan.planSha256 ||
     args['confirm-create'] !== p.creates.length || args['confirm-update'] !== p.updates.length ||
     args['confirm-attach'] !== p.attachExisting.length + p.creates.filter(row => row.avatar).length ||
     args['confirm-already-applied'] !== p.alreadyApplied.length) throw new TypeError('reviewed hash or counts differ');
-  // Exclusive creation prevents reapplying an interrupted attempt. Reconcile its journal first.
+  // The fixed environment store prevents replay across journals and processes.
   const directoryPath = path.dirname(args.journal), directoryStat = await lstat(directoryPath);
   if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o777) !== 0o700 ||
     directoryStat.uid !== process.getuid() || await realpath(directoryPath) !== directoryPath) throw new TypeError('journal requires a canonical owner-only directory');
-  const journal = await open(args.journal,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
+  const claim = await store.acquire({intentSha256:preparedWrite.intentSha256,businessPlanSha256:preparedPlan.planSha256,journal:args.journal});
+  let journal;
   try {
+    journal = await open(args.journal,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o600);
     await journal.writeFile(JSON.stringify({intentSha256:preparedWrite.intentSha256,businessPlanSha256:preparedPlan.planSha256})+'\n');
     await journal.sync();
     const directory = await open(path.dirname(args.journal),constants.O_RDONLY);
     try { await directory.sync(); } finally { await directory.close(); }
-    return await applyEnvironmentInvitationWrite({...parameters,execution:{
+    const result = await applyEnvironmentInvitationWrite({...parameters,execution:{
       authorizeIntent:async actual => isDeepStrictEqual(actual,preparedWrite) &&
         await readPrivateText(args.configuration) === configurationBytes,
       onEvent:async event => { await journal.writeFile(JSON.stringify(event)+'\n'); await journal.sync(); },
     }});
-  } finally { await journal.close(); }
+    await claim.complete();
+    return result;
+  } catch (error) {
+    try { await claim.stopped(); } catch (claimError) { error.claimEvidenceCode = claimError.code ?? 'CLAIM_PERSIST_FAILED'; }
+    throw error;
+  } finally { await journal?.close(); }
 }
 
 export async function main(argv = process.argv.slice(2)) {
@@ -182,7 +194,7 @@ export async function main(argv = process.argv.slice(2)) {
   } catch (error) {
     // The private artifact retains the Provider's safe cause; stdout has no raw records or service response.
     const diagnostic = {status:'stopped', code:error.code ?? 'INVITATION_ENVIRONMENT_FAILED', stage:error.stage ?? 'environment',
-      requestId:error.requestId, providerCode:error.providerCode, businessWorkflowVerified:false};
+      requestId:error.requestId, providerCode:error.providerCode, claimEvidenceCode:error.claimEvidenceCode, businessWorkflowVerified:false};
     if (args?.output) {
       try { await writePrivateJson(args.output, {...diagnostic, reason:error.reason, filesystemCode:error.filesystemCode,
         ...(error.providerError ? {providerError:error.providerError} : {})}); }

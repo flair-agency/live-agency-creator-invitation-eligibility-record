@@ -160,6 +160,35 @@ synchronizes each awaited event before execution proceeds. An existing journal
 stops apply, including after interruption. Flags bind an already authorized
 operation; they do not independently grant authority.
 
+The canonical selected environment file's parent directory must also be
+owner-only (mode 0700). Its fixed `.invitation-write-state` directory stores
+an exclusive lock per environment/dataset and a permanent claim per intent.
+They are independent of `--journal`: another journal cannot replay a claimed
+intent, and another process or newly approved plan cannot enter the dataset
+while an attempt is active. The lock is acquired before business preflight.
+Successful verified execution releases the active lock but retains its claim.
+
+A failed attempt retains its claim, journal and stopped lock. A killed process
+may leave a running lock. Reconciliation refuses a running attempt while its
+PID is alive; uncertain PID reuse conservatively stops recovery. Only explicit
+reconciliation of the matching claimed intent and journal can release a stopped
+or dead-process lock after `confirmed` or `missing`. `unknown`, `conflict`,
+unreadable evidence and mismatched ownership retain the lock. Do not delete
+claims or locks to force replay. A new residual plan needs a new intent and
+applicable approval after reconciliation releases the dataset. These files
+require the selected local filesystem's exclusive creation and synchronization
+semantics; no cross-host or shared-filesystem guarantee is claimed.
+
+The diagnostic codes `INVITATION_WRITE_DATASET_LOCKED` and
+`INVITATION_WRITE_INTENT_CONSUMED` identify exclusion and replay refusal.
+`claimEvidenceCode` reports an additional failure to preserve stopped-lock
+state. Preserve all evidence and inspect the selected store when that occurs;
+its existing running lock continues to block another attempt. Lock release uses
+an exclusive release guard so concurrent reconcilers cannot unlink a later
+attempt's lock. An abandoned release guard blocks automatic release; preserve
+it with the claim and journal for owner inspection rather than deleting it to
+force continuation.
+
 Programmatic callers pass `{access,configuration,targets,preparedPlan}` to
 `prepareEnvironmentInvitationWrite`. Apply additionally requires the returned
 `preparedWrite` and `execution:{authorizeIntent,onEvent}`. These trusted

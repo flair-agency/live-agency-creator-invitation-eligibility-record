@@ -298,7 +298,9 @@ test('CLI write apply persists a private journal before mutation, refuses replay
   const dir=await realpath(await mkdtemp(path.join(os.tmpdir(),'invitation-write-cli-')));await chmod(dir,0o700);t.after(()=>rm(dir,{recursive:true,force:true}));
   const history=[],f=fixture({history}),receipt=await one(f),preparedPlan=await plan({...f,targets:receipt,observations:observations()});
   const original=f.access.invoke.bind(f.access);
-  let applied=0;
+  let applied=0, releaseAttempt, enteredAttempt;
+  const held = new Promise(resolve=>{releaseAttempt=resolve;});
+  const entered = new Promise(resolve=>{enteredAttempt=resolve;});
   const journal=path.join(dir,'journal.ndjson');
   f.access.invoke=async(request,execution)=>{
     if(request.capability!=='record-dataset-write/v1')return original(request);
@@ -306,6 +308,7 @@ test('CLI write apply persists a private journal before mutation, refuses replay
     if(request.input.operation==='prepare')output={input:request.input,businessPlanSha256:preparedPlan.planSha256,intentSha256:'c'.repeat(64),selection};
     else if(request.input.operation==='apply') {
       assert.equal(await execution.authorizeIntent(request.input.prepared),true);
+      enteredAttempt(); await held;
       assert.match(await readFile(journal,'utf8'),/businessPlanSha256/);
       await execution.onEvent({stage:'create',recordIds:['new']});
       assert.match(await readFile(journal,'utf8'),/recordIds/);applied++;
@@ -315,15 +318,20 @@ test('CLI write apply persists a private journal before mutation, refuses replay
   };
   const paths={configuration:path.join(dir,'config.json'),targets:path.join(dir,'targets.json'),'prepared-plan':path.join(dir,'plan.json'),'prepared-write':path.join(dir,'intent.json')};
   for(const [key,value] of Object.entries({configuration,targets:receipt,'prepared-plan':preparedPlan}))await writeFile(paths[key],JSON.stringify(value),{mode:0o600});
+  await writeFile(path.join(dir,'env.json'),'{}',{mode:0o600});
   const common=['--environment',path.join(dir,'env.json'),'--generation',selection.generation,'--configuration',paths.configuration,
     '--configuration-sha256',createHash('sha256').update(JSON.stringify(configuration)).digest('hex'),'--targets',paths.targets,'--prepared-plan',paths['prepared-plan']];
   const options={createAccess:async()=>f.access};
   await run(parseArgs(['write-prepare',...common,'--output',paths['prepared-write']]),options);
   const applyArgs=parseArgs(['write-apply',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'apply.json'),
     '--expect-intent-sha256','c'.repeat(64),'--expect-plan-sha256',preparedPlan.planSha256,'--confirm-create','1','--confirm-update','0','--confirm-attach','0','--confirm-already-applied','0']);
-  assert.equal((await run(applyArgs,options)).businessWorkflowVerified,true);
+  const firstAttempt = run(applyArgs,options);
+  await entered;
+  await assert.rejects(run({...applyArgs,journal:path.join(dir,'concurrent.ndjson')},options),{code:'INVITATION_WRITE_DATASET_LOCKED'});
+  releaseAttempt();
+  assert.equal((await firstAttempt).businessWorkflowVerified,true);
   assert.equal((await stat(journal)).mode&0o777,0o600);
-  await assert.rejects(run(applyArgs,options),{code:'EEXIST'});assert.equal(applied,1);
+  await assert.rejects(run({...applyArgs,journal:path.join(dir,'different.ndjson')},options),{code:'INVITATION_WRITE_INTENT_CONSUMED'});assert.equal(applied,1);
   assert.equal((await run(parseArgs(['write-reconcile',...common,'--prepared-write',paths['prepared-write'],'--journal',journal,'--output',path.join(dir,'reconcile.json')]),options)).businessWorkflowVerified,true);
 });
 
