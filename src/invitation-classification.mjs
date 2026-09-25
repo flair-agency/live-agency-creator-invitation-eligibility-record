@@ -87,10 +87,14 @@ export function classifyInvitationEligibilityObservationsV3({ observations, mani
   const v2 = { ...observations, contractVersion: 'invitation-eligibility-observations/v2', creators: observations.creators.map(({ status, reason, complianceSignals, ...row }) => ({ ...row, eligibility: status })) };
   const result = classifyInvitationEligibilityObservations({ observations: v2, manifest, statuses,
     refinements: [...refinements, ...derived.filter(item => item.rule).map(item => ({ accountKey:item.accountKey, statusId:item.rule.statusId, evidenceRef:item.rule.evidenceRef }))] });
-  const receipt = { ...result, observedReasons: observations.creators.map(row => ({accountKey: normalizeAccountKey(row.accountKey), reason:row.reason, complianceSignals:row.complianceSignals ?? []})),
+  const receipt = { ...result, inputSha256: hash({ observations, manifest, statuses, refinements, complianceRules }),
+    observedReasons: observations.creators.map(row => ({accountKey: normalizeAccountKey(row.accountKey), reason:row.reason, complianceSignals:row.complianceSignals ?? []})),
     complianceIssues: unresolved.map(item => ({accountKey:normalizeAccountKey(item.accountKey), signal:item.signal, reason:'explicit compliance rule required'})) };
   receipt.blocked = result.blocked || receipt.complianceIssues.length > 0;
   if (receipt.blocked) receipt.observations = null;
+  const hashPayload = { ...receipt };
+  delete hashPayload.receiptSha256;
+  receipt.receiptSha256 = hash(hashPayload);
   return receipt;
 }
 

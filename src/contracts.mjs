@@ -132,10 +132,15 @@ export function validateInvitationEligibilityObservationsV3(snapshot) {
     creators: snapshot.creators.map((row) => {
       assertObject(row, "eligibility creator");
       for (const key of Object.keys(row)) if (!['accountKey','result','status','reason','complianceSignals','invitationCategory','externalUserId','nickname','avatar'].includes(key)) throw new TypeError(`unsupported eligibility creator field: ${key}`);
-      if (typeof row.status !== 'string' || !row.status.trim()) throw new TypeError('observed status requires an explicit value');
+      if (row.result === 'observed') {
+        if (typeof row.status !== 'string' || !row.status.trim()) throw new TypeError('observed status requires an explicit value');
+      } else if (row.status !== null) {
+        throw new TypeError('unobserved status must remain null');
+      }
       if (!(row.reason === null || (typeof row.reason === 'string' && row.reason.trim()))) throw new TypeError('reason must be null or nonempty text');
       if (row.status !== '対象外' && row.reason !== null) throw new TypeError('only ineligible status may carry a reason');
       if (row.complianceSignals !== undefined && (!Array.isArray(row.complianceSignals) || !row.complianceSignals.every(value => ['multiple_account_risk','other_agency_membership'].includes(value)) || new Set(row.complianceSignals).size !== row.complianceSignals.length)) throw new TypeError('invalid compliance signals');
+      if (row.result !== 'observed' && row.complianceSignals?.length) throw new TypeError('unobserved result cannot carry compliance signals');
       const { status, reason, complianceSignals, ...legacy } = row;
       return { ...legacy, eligibility: status };
     }) };

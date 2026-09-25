@@ -97,3 +97,40 @@ test('v3 keeps an unknown raw reason out of classification, fails closed on unkn
   assert.equal(withRule.blocked,false);assert.equal(withRule.observedReasons[0].reason,'preserved');assert.equal(withRule.observations.creators[0].state,'risk-reviewed');
   const legacy={...source,contractVersion:'invitation-eligibility-observations/v1',creators:[{accountKey:'synthetic.creator',result:'observed',eligibility:'その他の理由'}]};assert.equal(v1(legacy),legacy);
 });
+test('v3 unobserved rows remain blocked and carry no status or source-derived signals',()=>{
+  for (const result of ['not_found','unavailable']) {
+    const source={contractVersion:'invitation-eligibility-observations/v3',observedAt:'2030-01-02T03:04:05Z',rowCount:1,
+      creators:[{accountKey:'synthetic.creator',result,status:null,reason:null,invitationCategory:null}]};
+    assert.equal(v3(source),source);
+    const receipt=classifyV3({observations:source,manifest,statuses});
+    assert.equal(receipt.blocked,true);
+    assert.equal(receipt.observations,null);
+    assert.equal(receipt.issues[0].result,result);
+    for (const changes of [{status:'synthetic-parent'},{reason:'unsupported reason'},{complianceSignals:['multiple_account_risk']}]) {
+      const invalid=structuredClone(source);Object.assign(invalid.creators[0],changes);
+      assert.throws(()=>v3(invalid));
+    }
+  }
+});
+test('v3 receipt hashes bind raw reasons, compliance signals and final blocked outcome',()=>{
+  const source={contractVersion:'invitation-eligibility-observations/v3',observedAt:'2030-01-02T03:04:05Z',rowCount:1,
+    creators:[{accountKey:'synthetic.creator',result:'observed',status:'synthetic-parent',reason:null,invitationCategory:null}]};
+  const original=classifyV3({observations:source,manifest,statuses});
+  const withReason=structuredClone(source);withReason.creators[0].status='対象外';withReason.creators[0].reason='first reason';
+  const ineligibleStatuses=[...statuses,{id:'ineligible',label:'対象外',parentId:null}];
+  const first=classifyV3({observations:withReason,manifest,statuses:ineligibleStatuses});
+  withReason.creators[0].reason='second reason';
+  const changed=classifyV3({observations:withReason,manifest,statuses:ineligibleStatuses});
+  assert.notEqual(first.inputSha256,changed.inputSha256);
+  assert.notEqual(first.receiptSha256,changed.receiptSha256);
+  assert.notEqual(original.inputSha256,first.inputSha256);
+  withReason.creators[0].complianceSignals=['multiple_account_risk'];
+  const blocked=classifyV3({observations:withReason,manifest,statuses:ineligibleStatuses});
+  const withRule=classifyV3({observations:withReason,manifest,statuses:[...ineligibleStatuses,{id:'risk',label:'risk-reviewed',parentId:'ineligible'}],
+    complianceRules:[{signal:'multiple_account_risk',statusId:'risk',evidenceRef:'synthetic-policy'}]});
+  assert.equal(blocked.blocked,true);assert.equal(withRule.blocked,false);
+  assert.notEqual(changed.inputSha256,blocked.inputSha256);
+  assert.notEqual(changed.receiptSha256,blocked.receiptSha256);
+  assert.notEqual(blocked.inputSha256,withRule.inputSha256);
+  assert.notEqual(blocked.receiptSha256,withRule.receiptSha256);
+});
