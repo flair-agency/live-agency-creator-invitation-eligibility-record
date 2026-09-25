@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { validateInvitationEligibilityObservationsV2 } from './contracts.mjs';
+import { validateInvitationEligibilityObservationsV2, validateInvitationEligibilityObservationsV3 } from './contracts.mjs';
 import { normalizeAccountKey, validateTargetManifest, buildRefreshPlan, buildRefreshPlanFromHistory } from '../scripts/invitation_state_core.mjs';
 
 const check = (ok, message) => { if (!ok) throw new TypeError(message); };
@@ -69,6 +69,43 @@ export function classifyInvitationEligibilityObservations({ observations, manife
     classifications, issues, blocked: issues.length > 0 };
   return { ...receipt, receiptSha256: hash(receipt), observations: receipt.blocked ? null :
     { observedAt: observations.observedAt, rowCount: creators.length, creators } };
+}
+
+// An explicit compliance rule is required before a Provider signal can select
+// a child status. Unknown raw reasons deliberately have no such effect.
+export function classifyInvitationEligibilityObservationsV3({ observations, manifest, statuses, refinements = [], complianceRules = [] }) {
+  validateInvitationEligibilityObservationsV3(observations);
+  check(Array.isArray(complianceRules), 'compliance rules must be an array');
+  const bySignal = new Map();
+  for (const rule of complianceRules) {
+    check(rule && Object.keys(rule).every(key => ['signal', 'statusId', 'evidenceRef'].includes(key)) &&
+      ['multiple_account_risk', 'other_agency_membership'].includes(rule.signal) && text(rule.statusId) && text(rule.evidenceRef) && !bySignal.has(rule.signal), 'invalid compliance rule');
+    bySignal.set(rule.signal, rule);
+  }
+  const derived = observations.creators.flatMap(row => (row.complianceSignals ?? []).map(signal => ({ accountKey: row.accountKey, signal, rule: bySignal.get(signal) ?? null })));
+  const unresolved = derived.filter(item => !item.rule);
+  const derivedRefinements = new Map();
+  for (const item of derived.filter(item => item.rule)) {
+    const accountKey = normalizeAccountKey(item.accountKey);
+    const previous = derivedRefinements.get(accountKey);
+    check(!previous || previous.statusId === item.rule.statusId, 'conflicting compliance target statuses');
+    derivedRefinements.set(accountKey, { accountKey, statusId: item.rule.statusId,
+      evidenceRefs: [...(previous?.evidenceRefs ?? []), item.rule.evidenceRef] });
+  }
+  const v2 = { ...observations, contractVersion: 'invitation-eligibility-observations/v2', creators: observations.creators.map(({ status, reason, complianceSignals, ...row }) => ({ ...row, eligibility: status })) };
+  const result = classifyInvitationEligibilityObservations({ observations: v2, manifest, statuses,
+    refinements: [...refinements, ...[...derivedRefinements.values()].map(({ accountKey, statusId, evidenceRefs }) => ({
+      accountKey, statusId, evidenceRef: evidenceRefs.length === 1 ? evidenceRefs[0] : JSON.stringify([...new Set(evidenceRefs)].sort()),
+    }))] });
+  const receipt = { ...result, inputSha256: hash({ observations, manifest, statuses, refinements, complianceRules }),
+    observedReasons: observations.creators.map(row => ({accountKey: normalizeAccountKey(row.accountKey), reason:row.reason, complianceSignals:row.complianceSignals ?? []})),
+    complianceIssues: unresolved.map(item => ({accountKey:normalizeAccountKey(item.accountKey), signal:item.signal, reason:'explicit compliance rule required'})) };
+  receipt.blocked = result.blocked || receipt.complianceIssues.length > 0;
+  if (receipt.blocked) receipt.observations = null;
+  const hashPayload = { ...receipt };
+  delete hashPayload.receiptSha256;
+  receipt.receiptSha256 = hash(hashPayload);
+  return receipt;
 }
 
 export async function buildClassifiedInvitationRefreshPlan({ observations, manifest, statuses, refinements = [], ...inputs }) {
