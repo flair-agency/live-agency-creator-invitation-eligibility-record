@@ -138,7 +138,7 @@ export function validateInvitationEligibilityObservationsV3(snapshot) {
         throw new TypeError('unobserved status must remain null');
       }
       if (!(row.reason === null || (typeof row.reason === 'string' && row.reason.trim()))) throw new TypeError('reason must be null or nonempty text');
-      if (row.status !== '対象外' && row.reason !== null) throw new TypeError('only ineligible status may carry a reason');
+      if (row.result !== 'observed' && row.reason !== null) throw new TypeError('unobserved result cannot carry a reason');
       if (row.complianceSignals !== undefined && (!Array.isArray(row.complianceSignals) || !row.complianceSignals.every(value => ['multiple_account_risk','other_agency_membership'].includes(value)) || new Set(row.complianceSignals).size !== row.complianceSignals.length)) throw new TypeError('invalid compliance signals');
       if (row.result !== 'observed' && row.complianceSignals?.length) throw new TypeError('unobserved result cannot carry compliance signals');
       const { status, reason, complianceSignals, ...legacy } = row;

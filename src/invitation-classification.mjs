@@ -84,9 +84,19 @@ export function classifyInvitationEligibilityObservationsV3({ observations, mani
   }
   const derived = observations.creators.flatMap(row => (row.complianceSignals ?? []).map(signal => ({ accountKey: row.accountKey, signal, rule: bySignal.get(signal) ?? null })));
   const unresolved = derived.filter(item => !item.rule);
+  const derivedRefinements = new Map();
+  for (const item of derived.filter(item => item.rule)) {
+    const accountKey = normalizeAccountKey(item.accountKey);
+    const previous = derivedRefinements.get(accountKey);
+    check(!previous || previous.statusId === item.rule.statusId, 'conflicting compliance target statuses');
+    derivedRefinements.set(accountKey, { accountKey, statusId: item.rule.statusId,
+      evidenceRefs: [...(previous?.evidenceRefs ?? []), item.rule.evidenceRef] });
+  }
   const v2 = { ...observations, contractVersion: 'invitation-eligibility-observations/v2', creators: observations.creators.map(({ status, reason, complianceSignals, ...row }) => ({ ...row, eligibility: status })) };
   const result = classifyInvitationEligibilityObservations({ observations: v2, manifest, statuses,
-    refinements: [...refinements, ...derived.filter(item => item.rule).map(item => ({ accountKey:item.accountKey, statusId:item.rule.statusId, evidenceRef:item.rule.evidenceRef }))] });
+    refinements: [...refinements, ...[...derivedRefinements.values()].map(({ accountKey, statusId, evidenceRefs }) => ({
+      accountKey, statusId, evidenceRef: evidenceRefs.length === 1 ? evidenceRefs[0] : JSON.stringify([...new Set(evidenceRefs)].sort()),
+    }))] });
   const receipt = { ...result, inputSha256: hash({ observations, manifest, statuses, refinements, complianceRules }),
     observedReasons: observations.creators.map(row => ({accountKey: normalizeAccountKey(row.accountKey), reason:row.reason, complianceSignals:row.complianceSignals ?? []})),
     complianceIssues: unresolved.map(item => ({accountKey:normalizeAccountKey(item.accountKey), signal:item.signal, reason:'explicit compliance rule required'})) };

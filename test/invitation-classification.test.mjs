@@ -134,3 +134,30 @@ test('v3 receipt hashes bind raw reasons, compliance signals and final blocked o
   assert.notEqual(blocked.inputSha256,withRule.inputSha256);
   assert.notEqual(blocked.receiptSha256,withRule.receiptSha256);
 });
+
+test('v3 preserves a reason under a configured status independent of its display label',()=>{
+  const source={contractVersion:'invitation-eligibility-observations/v3',observedAt:'2030-01-02T03:04:05Z',rowCount:1,
+    creators:[{accountKey:'synthetic.creator',result:'observed',status:'synthetic-parent',reason:'source detail',invitationCategory:null}]};
+  assert.equal(v3(source),source);
+  const classified=classifyV3({observations:source,manifest,statuses});
+  assert.equal(classified.blocked,false);
+  assert.equal(classified.observedReasons[0].reason,'source detail');
+  assert.equal(classified.observations.creators[0].state,'synthetic-parent');
+});
+
+test('v3 coalesces compatible compliance rules and rejects conflicting targets',()=>{
+  const source={contractVersion:'invitation-eligibility-observations/v3',observedAt:'2030-01-02T03:04:05Z',rowCount:1,
+    creators:[{accountKey:'synthetic.creator',result:'observed',status:'synthetic-parent',reason:'source detail',invitationCategory:null,
+      complianceSignals:['multiple_account_risk','other_agency_membership']}]};
+  const rules=[
+    {signal:'multiple_account_risk',statusId:'reviewed',evidenceRef:'policy-one'},
+    {signal:'other_agency_membership',statusId:'reviewed',evidenceRef:'policy-two'},
+  ];
+  const compatible=classifyV3({observations:source,manifest,statuses,complianceRules:rules});
+  assert.equal(compatible.blocked,false);
+  assert.equal(compatible.classifications.length,1);
+  assert.equal(compatible.classifications[0].statusId,'reviewed');
+  assert.deepEqual(JSON.parse(compatible.classifications[0].evidenceRef),['policy-one','policy-two']);
+  assert.throws(()=>classifyV3({observations:source,manifest,statuses,
+    complianceRules:[rules[0],{...rules[1],statusId:'basic'}]}),/conflicting compliance target statuses/);
+});
